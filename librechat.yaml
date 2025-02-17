@@ -529,7 +529,6 @@ endpoints:
       forcePrompt: false
       modelDisplayLabel: "groq"
 
-#XAI
     - name: "xai"
       apiKey: "${XAI_API_KEY}"
       baseURL: "https://api.x.ai/v1"
@@ -543,7 +542,5 @@ endpoints:
       summaryModel: "grok-beta"
       forcePrompt: false
       modelDisplayLabel: "Grok"
-
-
 
    
