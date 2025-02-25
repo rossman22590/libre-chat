@@ -237,9 +237,8 @@ endpoints:
           "sonar-pro",
           "sonar-reasoning",
           "sonar",
-          "llama-3.1-sonar-small-128k-online",
-          "llama-3.1-sonar-large-128k-online",
-          "llama-3.1-sonar-huge-128k-online",
+          "r1-1776",
+          "sonar-deep-research"
           ]
         fetch: false # fetching list of models is not supported
       titleConvo: true
