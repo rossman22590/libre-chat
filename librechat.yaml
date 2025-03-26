@@ -22,13 +22,15 @@ cache: true
 registration:
  socialLogins: ["google", "facebook", "github", "discord", "openid"]
 
- capabilities:
-  - "execute_code"
-  - "file_search"
-  - "actions"
-  - "tools"
-  - "artifacts"
-  - "ocr"
+endpoints:
+  agents:
+    disableBuilder: false
+    capabilities:
+      - "execute_code"
+      - "actions"
+      - "artifacts"
+      - "ocr"
+
 
 speech:
   tts:
