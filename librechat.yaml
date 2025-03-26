@@ -22,16 +22,6 @@ cache: true
 registration:
  socialLogins: ["google", "facebook", "github", "discord", "openid"]
 
-endpoints:
-  agents:
-    disableBuilder: false
-    capabilities:
-      - "execute_code"
-      - "actions"
-      - "artifacts"
-      - "ocr"
-
-
 speech:
   tts:
     openai:
@@ -191,6 +181,13 @@ fileConfig:
 
 
 endpoints:
+  agents:
+    disableBuilder: false
+    capabilities:
+      - "execute_code"
+      - "actions"
+      - "artifacts"
+      - "ocr"
   assistants:
     disableBuilder: true
     pollIntervalMs: 750  # Polling interval for checking assistant updates
