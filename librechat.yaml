@@ -188,6 +188,7 @@ endpoints:
       - "actions"
       - "artifacts"
       - "ocr"
+      - "tools"
   assistants:
     disableBuilder: true
     pollIntervalMs: 750  # Polling interval for checking assistant updates
