@@ -186,7 +186,7 @@ webSearch:
  
   # Scraper Configuration
   firecrawlApiKey: "${FIRECRAWL_API_KEY}"
-  firecrawlApiUrl: "${FIRECRAWL_API_URL}"
+  # firecrawlApiUrl: "${FIRECRAWL_API_URL}"
   scraperType: "firecrawl" # Options: "firecrawl", "serper"
  
   # Reranker Configuration
