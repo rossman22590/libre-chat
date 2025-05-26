@@ -50,6 +50,7 @@ speech:
       automaticPlayback: false
       playbackRate: 1.0
       cacheTTS: true
+      
 
 # fileConfig:
 #   endpoints:
@@ -178,16 +179,34 @@ fileConfig:
 #         - "text/x-less"
       
 
-
+webSearch:
+  # Search Provider Configuration
+  serperApiKey: "${SERPER_API_KEY}"
+  searchProvider: "serper" # Options: "serper", "searxng"
+ 
+  # Scraper Configuration
+  firecrawlApiKey: "${FIRECRAWL_API_KEY}"
+  firecrawlApiUrl: "${FIRECRAWL_API_URL}"
+  scraperType: "firecrawl" # Options: "firecrawl", "serper"
+ 
+  # Reranker Configuration
+  jinaApiKey: "${JINA_API_KEY}"
+  cohereApiKey: "${COHERE_API_KEY}"
+  rerankerType: "jina" # Options: "jina", "cohere"
+ 
+  # General Settings
+  scraperTimeout: 7500 # Timeout in milliseconds for scraper requests (default: 7500)
+  safeSearch: 1 # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
 
 endpoints:
   agents:
     disableBuilder: false
-    # capabilities:
-    #   - "execute_code"
-    #   - "actions"
-    #   - "artifacts"
-    #   - "ocr"
+    capabilities:
+      - "execute_code"
+      - "actions"
+      - "artifacts"
+      - "ocr"
+      - "tools"
   assistants:
     disableBuilder: true
     pollIntervalMs: 750  # Polling interval for checking assistant updates
