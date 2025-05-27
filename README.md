@@ -1,4 +1,4 @@
-<p align="center">
+ <p align="center">
   <a href="https://librechat.ai">
     <img src="client/public/assets/logo.svg" height="256">
   </a>
