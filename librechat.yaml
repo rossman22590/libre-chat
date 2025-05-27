@@ -207,6 +207,7 @@ endpoints:
       - "artifacts"
       - "ocr"
       - "tools"
+      - "web_search"
   assistants:
     disableBuilder: true
     pollIntervalMs: 750  # Polling interval for checking assistant updates
