@@ -178,6 +178,24 @@ fileConfig:
 #         - "text/x-less"
       
 
+webSearch:
+  # Search Provider Configuration
+  serperApiKey: "${SERPER_API_KEY}"
+  searchProvider: "serper" # Options: "serper", "searxng"
+ 
+  # Scraper Configuration
+  firecrawlApiKey: "${FIRECRAWL_API_KEY}"
+  # firecrawlApiUrl: "${FIRECRAWL_API_URL}"
+  scraperType: "firecrawl" # Options: "firecrawl", "serper"
+ 
+  # Reranker Configuration
+  jinaApiKey: "${JINA_API_KEY}"
+  cohereApiKey: "${COHERE_API_KEY}"
+  rerankerType: "jina" # Options: "jina", "cohere"
+ 
+  # General Settings
+  scraperTimeout: 15000 # Timeout in milliseconds for scraper requests (default: 7500)
+  safeSearch: 2 # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
 
 
 endpoints:
