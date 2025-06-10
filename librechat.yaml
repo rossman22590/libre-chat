@@ -25,14 +25,16 @@ registration:
 
 memory:
   disabled: false
-  validKeys: ["user_preferences", "conversation_context", "personal_info"]
-  tokenLimit: 2000
+  # validKeys: ["user_preferences", "conversation_context", "personal_info"]
+  tokenLimit: 5000
   personalize: true
-  messageWindowSize: 5
+  messageWindowSize: 15
   agent:
     provider: "openAI"
-    model: "gpt-4"
-    instructions: "You are a helpful assistant that remembers user preferences and context."
+    model: "gpt-4o"
+    instructions: "Store information only in the specified validKeys categories.
+      Focus on explicitly stated preferences and important facts.
+      Delete outdated or corrected information promptly.Create new memories never override a memory"
     model_parameters:
       temperature: 0.7
       max_tokens: 1000
