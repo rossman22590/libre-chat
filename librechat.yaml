@@ -22,6 +22,21 @@ cache: true
 registration:
  socialLogins: ["google", "facebook", "github", "discord", "openid"]
 
+
+memory:
+  disabled: false
+  validKeys: ["user_preferences", "conversation_context", "personal_info"]
+  tokenLimit: 2000
+  personalize: true
+  messageWindowSize: 5
+  agent:
+    provider: "openAI"
+    model: "gpt-4"
+    instructions: "You are a helpful assistant that remembers user preferences and context."
+    model_parameters:
+      temperature: 0.7
+      max_tokens: 1000
+
 speech:
   tts:
     openai:
