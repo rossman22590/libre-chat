@@ -1,6 +1,6 @@
 version: 1.0.3
 cache: true
-# fileStrategy: "firebase"  # If using Firebase CDN
+fileStrategy: "firebase"  # If using Firebase CDN
  # fileConfig:
  #   endpoints:
  #     assistants:
