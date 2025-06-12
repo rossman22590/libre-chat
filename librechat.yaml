@@ -201,6 +201,7 @@ webSearch:
 endpoints:
   agents:
     disableBuilder: false
+    recursionLimit: 50
     # capabilities:
     #   - "execute_code"
     #   - "actions"
