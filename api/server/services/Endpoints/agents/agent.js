@@ -8,6 +8,7 @@ const {
   ErrorTypes,
   EModelEndpoint,
   EToolResources,
+  isAgentsEndpoint,
   replaceSpecialVars,
   providerEndpointMap,
 } = require('librechat-data-provider');
@@ -42,7 +43,11 @@ const initializeAgent = async ({
   allowedProviders,
   isInitialAgent = false,
 }) => {
-  if (allowedProviders.size > 0 && !allowedProviders.has(agent.provider)) {
+  if (
+    isAgentsEndpoint(endpointOption?.endpoint) &&
+    allowedProviders.size > 0 &&
+    !allowedProviders.has(agent.provider)
+  ) {
     throw new Error(
       `{ "type": "${ErrorTypes.INVALID_AGENT_PROVIDER}", "info": "${agent.provider}" }`,
     );
@@ -99,7 +104,7 @@ const initializeAgent = async ({
 
   agent.endpoint = provider;
   const { getOptions, overrideProvider } = await getProviderConfig(provider);
-  if (overrideProvider) {
+  if (overrideProvider !== agent.provider) {
     agent.provider = overrideProvider;
   }
 
@@ -126,7 +131,7 @@ const initializeAgent = async ({
   );
   const agentMaxContextTokens = optionalChainWithEmptyCheck(
     maxContextTokens,
-    getModelMaxTokens(tokensModel, providerEndpointMap[provider]),
+    getModelMaxTokens(tokensModel, providerEndpointMap[provider], options.endpointTokenConfig),
     4096,
   );
 
@@ -181,11 +186,12 @@ const initializeAgent = async ({
 
   return {
     ...agent,
+    tools,
     attachments,
     resendFiles,
     toolContextMap,
-    tools,
-    maxContextTokens: (agentMaxContextTokens - maxTokens) * 0.9,
+    useLegacyContent: !!options.useLegacyContent,
+    maxContextTokens: Math.round((agentMaxContextTokens - maxTokens) * 0.9),
   };
 };
 

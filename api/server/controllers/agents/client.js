@@ -8,15 +8,16 @@ const {
   Tokenizer,
   checkAccess,
   memoryInstructions,
+  formatContentStrings,
   createMemoryProcessor,
 } = require('@librechat/api');
 const {
   Callback,
   Providers,
   GraphEvents,
+  TitleMethod,
   formatMessage,
   formatAgentMessages,
-  formatContentStrings,
   getTokenCountForMessage,
   createMetadataAggregator,
 } = require('@librechat/agents');
@@ -26,7 +27,6 @@ const {
   VisionModes,
   ContentTypes,
   EModelEndpoint,
-  KnownEndpoints,
   PermissionTypes,
   isAgentsEndpoint,
   AgentCapabilities,
@@ -71,12 +71,14 @@ const payloadParser = ({ req, agent, endpoint }) => {
   if (isAgentsEndpoint(endpoint)) {
     return { model: undefined };
   } else if (endpoint === EModelEndpoint.bedrock) {
-    return bedrockInputSchema.parse(agent.model_parameters);
+    const parsedValues = bedrockInputSchema.parse(agent.model_parameters);
+    if (parsedValues.thinking == null) {
+      parsedValues.thinking = false;
+    }
+    return parsedValues;
   }
   return req.body.endpointOption.model_parameters;
 };
-
-const legacyContentEndpoints = new Set([KnownEndpoints.groq, KnownEndpoints.deepseek]);
 
 const noSystemModelRegex = [/\b(o1-preview|o1-mini|amazon\.titan-text)\b/gi];
 
@@ -458,6 +460,12 @@ class AgentClient extends BaseClient {
       res: this.options.res,
       agent: prelimAgent,
       allowedProviders,
+      endpointOption: {
+        endpoint:
+          prelimAgent.id !== Constants.EPHEMERAL_AGENT_ID
+            ? EModelEndpoint.agents
+            : memoryConfig.agent?.provider,
+      },
     });
 
     if (!agent) {
@@ -505,6 +513,39 @@ class AgentClient extends BaseClient {
   }
 
   /**
+   * Filters out image URLs from message content
+   * @param {BaseMessage} message - The message to filter
+   * @returns {BaseMessage} - A new message with image URLs removed
+   */
+  filterImageUrls(message) {
+    if (!message.content || typeof message.content === 'string') {
+      return message;
+    }
+
+    if (Array.isArray(message.content)) {
+      const filteredContent = message.content.filter(
+        (part) => part.type !== ContentTypes.IMAGE_URL,
+      );
+
+      if (filteredContent.length === 1 && filteredContent[0].type === ContentTypes.TEXT) {
+        const MessageClass = message.constructor;
+        return new MessageClass({
+          content: filteredContent[0].text,
+          additional_kwargs: message.additional_kwargs,
+        });
+      }
+
+      const MessageClass = message.constructor;
+      return new MessageClass({
+        content: filteredContent,
+        additional_kwargs: message.additional_kwargs,
+      });
+    }
+
+    return message;
+  }
+
+  /**
    * @param {BaseMessage[]} messages
    * @returns {Promise<void | (TAttachment | null)[]>}
    */
@@ -532,7 +573,8 @@ class AgentClient extends BaseClient {
         }
       }
 
-      const bufferString = getBufferString(messagesToProcess);
+      const filteredMessages = messagesToProcess.map((msg) => this.filterImageUrls(msg));
+      const bufferString = getBufferString(filteredMessages);
       const bufferMessage = new HumanMessage(`# Current Chat:\n\n${bufferString}`);
       return await this.processMemory([bufferMessage]);
     } catch (error) {
@@ -712,9 +754,6 @@ class AgentClient extends BaseClient {
         this.indexTokenCountMap,
         toolSet,
       );
-      if (legacyContentEndpoints.has(this.options.agent.endpoint?.toLowerCase())) {
-        initialMessages = formatContentStrings(initialMessages);
-      }
 
       /**
        *
@@ -729,6 +768,9 @@ class AgentClient extends BaseClient {
         const currentIndexCountMap = _currentIndexCountMap ?? indexTokenCountMap;
         if (i > 0) {
           this.model = agent.model_parameters.model;
+        }
+        if (i > 0 && config.signal == null) {
+          config.signal = abortController.signal;
         }
         if (agent.recursion_limit && typeof agent.recursion_limit === 'number') {
           config.recursionLimit = agent.recursion_limit;
@@ -778,6 +820,9 @@ class AgentClient extends BaseClient {
         }
 
         let messages = _messages;
+        if (agent.useLegacyContent === true) {
+          messages = formatContentStrings(messages);
+        }
         if (
           agent.model_parameters?.clientOptions?.defaultHeaders?.['anthropic-beta']?.includes(
             'prompt-caching',
@@ -1006,23 +1051,38 @@ class AgentClient extends BaseClient {
     }
     const { handleLLMEnd, collected: collectedMetadata } = createMetadataAggregator();
     const { req, res, agent } = this.options;
-    const endpoint = agent.endpoint;
+    let endpoint = agent.endpoint;
 
     /** @type {import('@librechat/agents').ClientOptions} */
     let clientOptions = {
       maxTokens: 75,
-      model: agent.model_parameters.model,
+      model: agent.model || agent.model_parameters.model,
     };
 
-    const { getOptions, overrideProvider, customEndpointConfig } =
-      await getProviderConfig(endpoint);
+    let titleProviderConfig = await getProviderConfig(endpoint);
 
     /** @type {TEndpoint | undefined} */
-    const endpointConfig = req.app.locals[endpoint] ?? customEndpointConfig;
+    const endpointConfig =
+      req.app.locals.all ?? req.app.locals[endpoint] ?? titleProviderConfig.customEndpointConfig;
     if (!endpointConfig) {
       logger.warn(
         '[api/server/controllers/agents/client.js #titleConvo] Error getting endpoint config',
       );
+    }
+
+    if (endpointConfig?.titleEndpoint && endpointConfig.titleEndpoint !== endpoint) {
+      try {
+        titleProviderConfig = await getProviderConfig(endpointConfig.titleEndpoint);
+        endpoint = endpointConfig.titleEndpoint;
+      } catch (error) {
+        logger.warn(
+          `[api/server/controllers/agents/client.js #titleConvo] Error getting title endpoint config for ${endpointConfig.titleEndpoint}, falling back to default`,
+          error,
+        );
+        // Fall back to original provider config
+        endpoint = agent.endpoint;
+        titleProviderConfig = await getProviderConfig(endpoint);
+      }
     }
 
     if (
@@ -1033,7 +1093,7 @@ class AgentClient extends BaseClient {
       clientOptions.model = endpointConfig.titleModel;
     }
 
-    const options = await getOptions({
+    const options = await titleProviderConfig.getOptions({
       req,
       res,
       optionsOnly: true,
@@ -1042,7 +1102,7 @@ class AgentClient extends BaseClient {
       endpointOption: { model_parameters: clientOptions },
     });
 
-    let provider = options.provider ?? overrideProvider ?? agent.provider;
+    let provider = options.provider ?? titleProviderConfig.overrideProvider ?? agent.provider;
     if (
       endpoint === EModelEndpoint.azureOpenAI &&
       options.llmConfig?.azureOpenAIApiInstanceName == null
@@ -1075,16 +1135,23 @@ class AgentClient extends BaseClient {
       ),
     );
 
-    if (provider === Providers.GOOGLE) {
+    if (
+      provider === Providers.GOOGLE &&
+      (endpointConfig?.titleMethod === TitleMethod.FUNCTIONS ||
+        endpointConfig?.titleMethod === TitleMethod.STRUCTURED)
+    ) {
       clientOptions.json = true;
     }
 
     try {
       const titleResult = await this.run.generateTitle({
         provider,
+        clientOptions,
         inputText: text,
         contentParts: this.contentParts,
-        clientOptions,
+        titleMethod: endpointConfig?.titleMethod,
+        titlePrompt: endpointConfig?.titlePrompt,
+        titlePromptTemplate: endpointConfig?.titlePromptTemplate,
         chainOptions: {
           signal: abortController.signal,
           callbacks: [
@@ -1132,8 +1199,52 @@ class AgentClient extends BaseClient {
     }
   }
 
-  /** Silent method, as `recordCollectedUsage` is used instead */
-  async recordTokenUsage() {}
+  /**
+   * @param {object} params
+   * @param {number} params.promptTokens
+   * @param {number} params.completionTokens
+   * @param {OpenAIUsageMetadata} [params.usage]
+   * @param {string} [params.model]
+   * @param {string} [params.context='message']
+   * @returns {Promise<void>}
+   */
+  async recordTokenUsage({ model, promptTokens, completionTokens, usage, context = 'message' }) {
+    try {
+      await spendTokens(
+        {
+          model,
+          context,
+          conversationId: this.conversationId,
+          user: this.user ?? this.options.req.user?.id,
+          endpointTokenConfig: this.options.endpointTokenConfig,
+        },
+        { promptTokens, completionTokens },
+      );
+
+      if (
+        usage &&
+        typeof usage === 'object' &&
+        'reasoning_tokens' in usage &&
+        typeof usage.reasoning_tokens === 'number'
+      ) {
+        await spendTokens(
+          {
+            model,
+            context: 'reasoning',
+            conversationId: this.conversationId,
+            user: this.user ?? this.options.req.user?.id,
+            endpointTokenConfig: this.options.endpointTokenConfig,
+          },
+          { completionTokens: usage.reasoning_tokens },
+        );
+      }
+    } catch (error) {
+      logger.error(
+        '[api/server/controllers/agents/client.js #recordTokenUsage] Error recording token usage',
+        error,
+      );
+    }
+  }
 
   getEncoding() {
     return 'o200k_base';
