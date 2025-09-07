@@ -654,7 +654,7 @@ endpoints:
               'openai/gpt-oss-20b',
               'qwen/qwen3-32b'
           ]
-        fetch: true
+      fetch: true
       titleConvo: true
       titleModel: "mixtral-8x7b-32768"
       summarize: false
