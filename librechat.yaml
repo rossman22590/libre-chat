@@ -80,22 +80,22 @@ interface:
 
       By using the Website, you acknowledge that you have read these Terms of Service and agree to be bound by them.
 
-  endpointsMenu: true
-  modelSelect: true
-  parameters: true
-  sidePanel: true
-  presets: true
-  prompts: true
-  bookmarks: true
-  multiConvo: true
-  agents: true
-  peoplePicker:
-    users: true
-    groups: true
-    roles: true
-  marketplace:
-      use: true
-  fileCitations: true
+  # endpointsMenu: true
+  # modelSelect: true
+  # parameters: true
+  # sidePanel: true
+  # presets: true
+  # prompts: true
+  # bookmarks: true
+  # multiConvo: true
+  # agents: true
+  # peoplePicker:
+  #   users: true
+  #   groups: true
+  #   roles: true
+  # marketplace:
+  #     use: true
+  # fileCitations: true
   # Temporary chat retention period in hours (default: 720, min: 1, max: 8760)
   # temporaryChatRetention: 1
 registration:
