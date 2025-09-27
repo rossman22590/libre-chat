@@ -1,122 +1,26 @@
-# For more information, see the Configuration Guide:
-# https://www.librechat.ai/docs/configuration/librechat_yaml
-
-# Configuration version (required)
-version: 1.2.1
-
-fileStrategy: "firebase"  # If using Firebase CDN
-# Cache settings: Set to true to enable caching
+version: 1.0.3
 cache: true
-
-# File storage configuration
-# Single strategy for all file types (legacy format, still supported)
-# fileStrategy: "s3"
-
-# Granular file storage strategies (new format - recommended)
-# Allows different storage strategies for different file types
-# fileStrategy:
-#   avatar: "s3"        # Storage for user/agent avatar images
-#   image: "firebase"   # Storage for uploaded images in chats
-#   document: "local"   # Storage for document uploads (PDFs, text files, etc.)
-
-# Available strategies: "local", "s3", "firebase"
-# If not specified, defaults to "local" for all file types
-# You can mix and match strategies based on your needs:
-# - Use S3 for avatars for fast global access
-# - Use Firebase for images with automatic optimization
-# - Use local storage for documents for privacy/compliance
-
-# Custom interface configuration
-interface:
-  customWelcome: 'Welcome to Multibot! Chat with all the top LLMs!'
-  # Enable/disable file search as a chatarea selection (default: true)
-  # Note: This setting does not disable the Agents File Search Capability.
-  # To disable the Agents Capability, see the Agents Endpoint configuration instead.
-  fileSearch: true
-  # Privacy policy settings
-  privacyPolicy:
-    externalUrl: 'https://account.myapps.ai/privacypolicy'
-    openNewTab: true
-
-  # Terms of service
-  termsOfService:
-    externalUrl: 'https://account.myapps.ai/terms'
-    openNewTab: true
-    modalAcceptance: true
-    modalTitle: 'Terms of Service for AI Tutor Multibot'
-    modalContent: |
-      # Terms and Conditions for LibreChat
-
-      *Effective Date: February 18, 2024*
-
-      Welcome to LibreChat, the informational website for the open-source AI chat platform, available at https://librechat.ai. These Terms of Service ("Terms") govern your use of our website and the services we offer. By accessing or using the Website, you agree to be bound by these Terms and our Privacy Policy, accessible at https://librechat.ai//privacy.
-
-      ## 1. Ownership
-
-      Upon purchasing a package from AI Tutor, you are granted the right to download and use the code for accessing an admin panel for LibreChat. While you own the downloaded code, you are expressly prohibited from reselling, redistributing, or otherwise transferring the code to third parties without explicit permission from LibreChat.
-
-      ## 2. User Data
-
-      We collect personal data, such as your name, email address, and payment information, as described in our Privacy Policy. This information is collected to provide and improve our services, process transactions, and communicate with you.
-
-      ## 3. Non-Personal Data Collection
-
-      The Website uses cookies to enhance user experience, analyze site usage, and facilitate certain functionalities. By using the Website, you consent to the use of cookies in accordance with our Privacy Policy.
-
-      ## 4. Use of the Website
-
-      You agree to use the Website only for lawful purposes and in a manner that does not infringe the rights of, restrict, or inhibit anyone else's use and enjoyment of the Website. Prohibited behavior includes harassing or causing distress or inconvenience to any person, transmitting obscene or offensive content, or disrupting the normal flow of dialogue within the Website.
-
-      ## 5. Governing Law
-
-      These Terms shall be governed by and construed in accordance with the laws of the United States, without giving effect to any principles of conflicts of law.
-
-      ## 6. Changes to the Terms
-
-      We reserve the right to modify these Terms at any time. We will notify users of any changes by email. Your continued use of the Website after such changes have been notified will constitute your consent to such changes.
-
-      ## 7. Contact Information
-
-      If you have any questions about these Terms, please contact us at support@mytsi.org.
-
-      By using the Website, you acknowledge that you have read these Terms of Service and agree to be bound by them.
-
-  endpointsMenu: true
-  modelSelect: true
-  parameters: true
-  sidePanel: true
-  presets: true
-  prompts: true
-  bookmarks: true
-  multiConvo: true
-  agents: true
-  peoplePicker:
-    users: true
-    groups: true
-    roles: true
-  marketplace:
-      use: true
-  fileCitations: true
-  # Temporary chat retention period in hours (default: 720, min: 1, max: 8760)
-  # temporaryChatRetention: 1
+fileStrategy: "firebase"  # If using Firebase CDN
+ # fileConfig:
+ #   endpoints:
+ #     assistants:
+ #      fileLimit: 5
+ #      fileSizeLimit: 100  # Maximum size for an individual file in MB
+ #      totalSizeLimit: 300  # Maximum total size for all files in a single request in MB
+ #    openAI:
+ #      fileSizeLimit: 10  # Disables file uploading to the OpenAI endpoint
+ #    default:
+ #      totalSizeLimit: 20
+ #  serverFileSizeLimit: 100  # Global server file size limit in MB
+ #  avatarSizeLimit: 2  # Limit for user avatar image size in MB
+# rateLimits:
+ # fileUploads:
+ #   ipMax: 100
+ #   ipWindowInMinutes: 60
+ #   userMax: 50
+ #   userWindowInMinutes: 60
 registration:
  socialLogins: ["google", "facebook", "github", "discord", "openid"]
-
-memory:
-  disabled: false
-  # validKeys: ["user_preferences", "conversation_context", "personal_info"]
-  tokenLimit: 5000
-  personalize: true
-  messageWindowSize: 15
-  agent:
-    provider: "openAI"
-    model: "gpt-4o"
-    instructions: "Store information only in the specified validKeys categories.
-      Focus on explicitly stated preferences and important facts.
-      Delete outdated or corrected information promptly.Create new memories never override a memory"
-    model_parameters:
-      temperature: 0.7
-      max_tokens: 1000
 
 speech:
   tts:
@@ -146,7 +50,6 @@ speech:
       automaticPlayback: false
       playbackRate: 1.0
       cacheTTS: true
-      
 
 # fileConfig:
 #   endpoints:
@@ -189,25 +92,6 @@ fileConfig:
         - "application/typescript"
         - "text/x-typescript"        
 
-
-webSearch:
-  # Search Provider Configuration
-  serperApiKey: "${SERPER_API_KEY}"
-  searchProvider: "serper" # Options: "serper", "searxng"
- 
-  # Scraper Configuration
-  firecrawlApiKey: "${FIRECRAWL_API_KEY}"
-  # firecrawlApiUrl: "${FIRECRAWL_API_URL}"
-  scraperType: "firecrawl" # Options: "firecrawl", "serper"
- 
-  # Reranker Configuration
-  jinaApiKey: "${JINA_API_KEY}"
-  cohereApiKey: "${COHERE_API_KEY}"
-  rerankerType: "jina" # Options: "jina", "cohere"
- 
-  # General Settings
-  scraperTimeout: 15000 # Timeout in milliseconds for scraper requests (default: 7500)
-  safeSearch: 2 # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
 
 # fileConfig:
 #   endpoints:
@@ -294,18 +178,35 @@ webSearch:
 #         - "text/x-less"
       
 
+webSearch:
+  # Search Provider Configuration
+  serperApiKey: "${SERPER_API_KEY}"
+  searchProvider: "serper" # Options: "serper", "searxng"
+ 
+  # Scraper Configuration
+  firecrawlApiKey: "${FIRECRAWL_API_KEY}"
+  # firecrawlApiUrl: "${FIRECRAWL_API_URL}"
+  scraperType: "firecrawl" # Options: "firecrawl", "serper"
+ 
+  # Reranker Configuration
+  jinaApiKey: "${JINA_API_KEY}"
+  cohereApiKey: "${COHERE_API_KEY}"
+  rerankerType: "jina" # Options: "jina", "cohere"
+ 
+  # General Settings
+  scraperTimeout: 15000 # Timeout in milliseconds for scraper requests (default: 7500)
+  safeSearch: 2 # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
 
 
 endpoints:
   agents:
     disableBuilder: false
-    capabilities:
-      - "execute_code"
-      - "actions"
-      - "artifacts"
-      - "ocr"
-      - "tools"
-      - "web_search"
+    recursionLimit: 50
+    # capabilities:
+    #   - "execute_code"
+    #   - "actions"
+    #   - "artifacts"
+    #   - "ocr"
   assistants:
     disableBuilder: true
     pollIntervalMs: 750  # Polling interval for checking assistant updates
@@ -622,7 +523,7 @@ endpoints:
         "xwin-lm/xwin-lm-70b"
 
           ]
-      fetch: true
+        fetch: true
       dropParams: ["stop"]
       titleConvo: true
       titleModel: "gpt-3.5-turbo"
@@ -635,26 +536,17 @@ endpoints:
       apiKey: "${GROQ_API_KEY}"
       baseURL: "https://api.groq.com/openai/v1/"
       models:
-          default: [
-              'allam-2-7b',
-              'deepseek-r1-distill-llama-70b',
-              'gemma2-9b-it',
-              'groq/compound',
-              'groq/compound-mini',
-              'llama-3.1-8b-instant',
-              'llama-3.3-70b-versatile',
-              'meta-llama/llama-4-maverick-17b-128e-instruct',
-              'meta-llama/llama-4-scout-17b-16e-instruct',
-              'meta-llama/llama-guard-4-12b',
-              'meta-llama/llama-prompt-guard-2-22m',
-              'meta-llama/llama-prompt-guard-2-86m',
-              'moonshotai/kimi-k2-instruct',
-              'moonshotai/kimi-k2-instruct-0905',
-              'openai/gpt-oss-120b',
-              'openai/gpt-oss-20b',
-              'qwen/qwen3-32b'
+        default: [
+            'llama-3.3-70b-versatile',
+            'llama-3.1-8b-instant',
+            'llama3-70b-8192',
+            'llama3-8b-8192',
+            'llama2-70b-4096',
+            'mixtral-8x7b-32768',
+            'deepseek-r1-distill-llama-70b',
+            'gemma-7b-it',
           ]
-      fetch: true
+        fetch: true
       titleConvo: true
       titleModel: "mixtral-8x7b-32768"
       summarize: false
