@@ -263,14 +263,13 @@ endpoints:
           "sonar-pro",
           "sonar-reasoning",
           "sonar",
-          "r1-1776",
           "sonar-deep-research"
           ]
         fetch: false # fetching list of models is not supported
       titleConvo: true
-      titleModel: "llama-3.1-sonar-small-128k-online"
+      titleModel: "sonar"
       summarize: false
-      summaryModel: "llama-3.1-sonar-small-128k-online"
+      summaryModel: "sonar"
       forcePrompt: false
       # dropParams: ["stop", "user", "frequency_penalty", "presence_penalty"]
       dropParams: ["stop", "frequency_penalty"]
