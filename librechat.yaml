@@ -685,7 +685,7 @@ memory:
   # (optional) Disable memory functionality
   disabled: false
   # (optional) Restrict memory keys to specific values to limit memory storage and improve consistency
-  validKeys: ["preferences", "work_info", "personal_info", "skills", "interests", "context"]
+  # validKeys: ["preferences", "work_info", "personal_info", "skills", "interests", "context"]
   # (optional) Maximum token limit for memory storage (not yet implemented for token counting)
   tokenLimit: 10000
   # (optional) Enable personalization features (defaults to true if memory is configured)
