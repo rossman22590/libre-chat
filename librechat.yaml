@@ -314,11 +314,15 @@ endpoints:
   agents:
     disableBuilder: false
     recursionLimit: 50
-    # capabilities:
-    #   - "execute_code"
-    #   - "actions"
-    #   - "artifacts"
-    #   - "ocr"
+    capabilities:
+      - "execute_code"
+      - "actions"
+      - "artifacts"
+      - "ocr"
+      - "file_search"
+      - "tools"
+      - "context"
+      - "web_search"     
   assistants:
     disableBuilder: true
     pollIntervalMs: 750  # Polling interval for checking assistant updates
