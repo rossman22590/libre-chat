@@ -692,11 +692,11 @@ memory:
   # When false, users will not see the Personalization tab in settings
   personalize: true
   # Memory agent configuration - either use an existing agent by ID or define inline
-  agent:
-    provider: "openai"
-    model: "gpt-4o-mini"
-    instructions: "You are a memory management assistant. Store and manage user information accurately."
-    model_parameters:
-      temperature: 0.1
+  # agent:
+  #   provider: "openai"
+  #   model: "gpt-4o-mini"
+  #   instructions: "You are a memory management assistant. Store and manage user information accurately."
+  #   model_parameters:
+  #     temperature: 0.1
 
    
