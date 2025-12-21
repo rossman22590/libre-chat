@@ -379,7 +379,6 @@ endpoints:
           "sonar-pro",
           "sonar-reasoning",
           "sonar",
-          "r1-1776",
           "sonar-deep-research"
           ]
         fetch: false # fetching list of models is not supported
