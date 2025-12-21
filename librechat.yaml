@@ -1,0 +1,705 @@
+version: 1.2.1
+cache: true
+fileStrategy: "firebase"  # If using Firebase CDN
+
+# Custom interface configuration
+interface:
+  customWelcome: 'Welcome to Multibot! Enjoy your experience.'
+  # Enable/disable file search as a chatarea selection (default: true)
+  # Note: This setting does not disable the Agents File Search Capability.
+  # To disable the Agents Capability, see the Agents Endpoint configuration instead.
+  fileSearch: true
+  # Privacy policy settings
+  privacyPolicy:
+    externalUrl: 'https://account.myapps.ai/terms'
+    openNewTab: true
+
+  # Terms of service
+  termsOfService:
+    externalUrl: 'https://account.myapps.ai/terms'
+    openNewTab: true
+    modalAcceptance: true
+    modalTitle: 'Terms of Service for Multibot'
+    modalContent: |
+      # Terms and Conditions for Multibot
+
+      *Effective Date: February 18, 2024*
+
+      Welcome to Multibot, the informational website for the open-source AI chat platform, available at https://librechat.ai. These Terms of Service ("Terms") govern your use of our website and the services we offer. By accessing or using the Website, you agree to be bound by these Terms and our Privacy Policy, accessible at https://librechat.ai//privacy.
+
+      ## 1. Ownership
+
+      Upon purchasing a package from Multibot, you are granted the right to download and use the code for accessing an admin panel for Multibot. While you own the downloaded code, you are expressly prohibited from reselling, redistributing, or otherwise transferring the code to third parties without explicit permission from Multibot.
+
+      ## 2. User Data
+
+      We collect personal data, such as your name, email address, and payment information, as described in our Privacy Policy. This information is collected to provide and improve our services, process transactions, and communicate with you.
+
+      ## 3. Non-Personal Data Collection
+
+      The Website uses cookies to enhance user experience, analyze site usage, and facilitate certain functionalities. By using the Website, you consent to the use of cookies in accordance with our Privacy Policy.
+
+      ## 4. Use of the Website
+
+      You agree to use the Website only for lawful purposes and in a manner that does not infringe the rights of, restrict, or inhibit anyone else's use and enjoyment of the Website. Prohibited behavior includes harassing or causing distress or inconvenience to any person, transmitting obscene or offensive content, or disrupting the normal flow of dialogue within the Website.
+
+      ## 5. Governing Law
+
+      These Terms shall be governed by and construed in accordance with the laws of the United States, without giving effect to any principles of conflicts of law.
+
+      ## 6. Changes to the Terms
+
+      We reserve the right to modify these Terms at any time. We will notify users of any changes by email. Your continued use of the Website after such changes have been notified will constitute your consent to such changes.
+
+      ## 7. Contact Information
+
+      If you have any questions about these Terms, please contact us at contact@myapps.ai.
+
+      By using the Website, you acknowledge that you have read these Terms of Service and agree to be bound by them.
+
+  endpointsMenu: true
+  modelSelect: true
+  parameters: true
+  sidePanel: true
+  presets: true
+  prompts: true
+  bookmarks: true
+  multiConvo: true
+  agents: true
+  peoplePicker:
+    users: true
+    groups: true
+    roles: true
+  marketplace:
+    use: false
+  fileCitations: true
+  mcpServers:
+    # MCP Servers configuration
+    # Controls user permissions for MCP (Model Context Protocol) server management
+    # - use: Allow users to use configured MCP servers
+    # - create: Allow users to create and manage new MCP servers
+    # - share: Allow users to share MCP servers with other users
+    use: false
+    create: false
+    share: false
+    # Creation / edit MCP server config Dialog config example
+    # trustCheckbox:
+    #   label:
+    #     en: 'I understand and I want to continue'
+    #     de: 'Ich verstehe und möchte fortfahren'
+    #     de-DE: 'Ich verstehe und möchte fortfahren' # You can narrow translation to regions like (de-DE or de-CH)
+    #   subLabel:
+    #     en: |
+    #       Librechat hasn't reviewed this MCP server. Attackers may attempt to steal your data or trick the model into taking unintended actions, including destroying data. <a href="https://google.de" target="_blank"><strong>Learn more.</strong></a>
+    #     de: |
+    #       Multibot hat diesen MCP-Server nicht überprüft. Angreifer könnten versuchen, Ihre Daten zu stehlen oder das Modell zu unbeabsichtigten Aktionen zu verleiten, einschließlich der Zerstörung von Daten. <a href="https://google.de" target="_blank"><strong>Mehr erfahren.</strong></a>
+
+  # Temporary chat retention period in hours (default: 720, min: 1, max: 8760)
+  # temporaryChatRetention: 1
+ # fileConfig:
+ #   endpoints:
+ #     assistants:
+ #      fileLimit: 5
+ #      fileSizeLimit: 100  # Maximum size for an individual file in MB
+ #      totalSizeLimit: 300  # Maximum total size for all files in a single request in MB
+ #    openAI:
+ #      fileSizeLimit: 10  # Disables file uploading to the OpenAI endpoint
+ #    default:
+ #      totalSizeLimit: 20
+ #  serverFileSizeLimit: 100  # Global server file size limit in MB
+ #  avatarSizeLimit: 2  # Limit for user avatar image size in MB
+# rateLimits:
+ # fileUploads:
+ #   ipMax: 100
+ #   ipWindowInMinutes: 60
+ #   userMax: 50
+ #   userWindowInMinutes: 60
+registration:
+ socialLogins: ["google", "facebook", "github", "discord", "openid"]
+
+speech:
+  tts:
+    openai:
+      apiKey: '${TTS_API_KEY}'
+      model: 'tts-1'
+      voices: ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']
+ 
+  stt:
+    openai:
+      apiKey: '${STT_API_KEY}'
+      model: 'whisper-1'
+
+  speechTab:
+    conversationMode: false
+    advancedMode: true
+    speechToText:
+      engineSTT: "external"
+      languageSTT: "English (US)"
+      autoTranscribeAudio: false
+      decibelValue: -45
+      autoSendText: 0
+    textToSpeech:
+      engineTTS: "external"
+      voice: "alloy"
+      languageTTS: "en"
+      automaticPlayback: false
+      playbackRate: 1.0
+      cacheTTS: true
+
+# fileConfig:
+#   endpoints:
+#     default:
+#       fileLimit: 25
+#       fileSizeLimit: 10
+#       totalSizeLimit: 200
+#       supportedMimeTypes:
+#         - "image/.*"
+#         - "application/pdf"   
+#         - "text/plain"   
+fileConfig:
+  endpoints:
+    default:
+      fileLimit: 50
+      fileSizeLimit: 100
+      totalSizeLimit: 25
+      supportedMimeTypes:
+        - "image/.*"
+        - "application/pdf"
+        - "application/msword"
+        - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        - "application/vnd.oasis.opendocument.text"
+        - "text/plain"
+        - "application/vnd.ms-excel"
+        - "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        - "application/vnd.oasis.opendocument.spreadsheet"
+        - "text/csv"
+        - "application/csv"
+        - "text/comma-separated-values"
+        - "application/x-csv"
+        - "text/x-csv"
+        - "application/vnd.ms-excel.csv"
+        - "application/vnd.openxmlformats-officedocument.spreadsheetml.csv"
+        - "text/javascript"
+        - "application/javascript"
+        - "application/x-javascript"
+        - "text/x-javascript"
+        - "text/typescript"
+        - "application/typescript"
+        - "text/x-typescript"        
+
+
+# fileConfig:
+#   endpoints:
+#     default:
+#       fileLimit: 5
+#       fileSizeLimit: 5
+#       totalSizeLimit: 15
+#       supportedMimeTypes:
+#         - "image/.*"
+#         - "application/pdf"
+#         - "application/msword"
+#         - "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+#         - "application/vnd.oasis.opendocument.text"
+#         - "text/plain"
+#         - "application/vnd.ms-excel"
+#         - "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+#         - "application/vnd.oasis.opendocument.spreadsheet"
+#         - "video/mp4"
+#         - "video/x-msvideo"
+#         - "video/quicktime"
+#         - "video/x-ms-wmv"
+#         - "video/x-flv"
+#         - "video/webm"
+#         - "video/3gpp"
+#         - "video/mpeg"
+#         - "audio/mpeg"
+#         - "audio/wav"
+#         - "audio/wma"
+#         - "audio/aac"
+#         - "audio/ogg"
+#         - "audio/midi"
+#         - "audio/x-m4a"
+#         - "audio/webm"
+#         - "text/csv"
+#         - "application/csv"
+#         - "text/comma-separated-values"
+#         - "application/x-csv"
+#         - "text/x-csv"
+#         - "application/vnd.ms-excel.csv"
+#         - "application/vnd.openxmlformats-officedocument.spreadsheetml.csv"
+#         - "text/javascript"
+#         - "application/javascript"
+#         - "application/x-javascript"
+#         - "text/x-javascript"
+#         - "text/typescript"
+#         - "application/typescript"
+#         - "text/x-typescript"
+#         - "application/x-typescript"
+#         - "text/tsx"
+#         - "text/jsx"
+#         - "text/x-python"
+#         - "application/x-python"
+#         - "text/x-python-script"
+#         - "application/x-python-code"
+#         - "text/x-java"
+#         - "text/java"
+#         - "text/x-java-source"
+#         - "text/x-c"
+#         - "text/x-c++"
+#         - "text/x-c++src"
+#         - "text/x-csharp"
+#         - "text/x-ruby"
+#         - "application/x-ruby"
+#         - "text/x-php"
+#         - "application/x-httpd-php"
+#         - "application/php"
+#         - "text/x-go"
+#         - "text/x-scala"
+#         - "text/x-swift"
+#         - "text/x-kotlin"
+#         - "text/x-rust"
+#         - "text/x-dart"
+#         - "text/x-haskell"
+#         - "text/x-lua"
+#         - "text/x-perl"
+#         - "text/x-sql"
+#         - "application/sql"
+#         - "text/xml"
+#         - "application/xml"
+#         - "text/html"
+#         - "application/xhtml+xml"
+#         - "text/css"
+#         - "text/x-sass"
+#         - "text/x-less"
+      
+
+webSearch:
+  # Search Provider Configuration
+  serperApiKey: "${SERPER_API_KEY}"
+  searchProvider: "serper" # Options: "serper", "searxng"
+ 
+  # Scraper Configuration
+  firecrawlApiKey: "${FIRECRAWL_API_KEY}"
+  # firecrawlApiUrl: "${FIRECRAWL_API_URL}"
+  scraperType: "firecrawl" # Options: "firecrawl", "serper"
+ 
+  # Reranker Configuration
+  jinaApiKey: "${JINA_API_KEY}"
+  cohereApiKey: "${COHERE_API_KEY}"
+  rerankerType: "jina" # Options: "jina", "cohere"
+ 
+  # General Settings
+  scraperTimeout: 15000 # Timeout in milliseconds for scraper requests (default: 7500)
+  safeSearch: 2 # Options: 0 (OFF), 1 (MODERATE - default), 2 (STRICT)
+
+
+# Example Actions Object Structure
+actions:
+  allowedDomains:
+    - 'swapi.dev'
+    - 'librechat.ai'
+    - 'google.com'
+
+# MCP Server domain restrictions for remote transports (SSE, WebSocket, HTTP)
+# Stdio transports (local processes) are not restricted.
+# If not configured, all domains are allowed (permissive default).
+# Supports wildcards: '*.example.com' matches 'api.example.com', 'staging.example.com', etc.
+# mcpSettings:
+#   allowedDomains:
+#     - 'localhost'
+#     - '*.example.com'
+#     - 'trusted-mcp-provider.com'
+
+endpoints:
+  agents:
+    disableBuilder: false
+    recursionLimit: 50
+    # capabilities:
+    #   - "execute_code"
+    #   - "actions"
+    #   - "artifacts"
+    #   - "ocr"
+  assistants:
+    disableBuilder: true
+    pollIntervalMs: 750  # Polling interval for checking assistant updates
+    timeoutMs: 180000  # Timeout for assistant operations
+    # Should only be one or the other, either `supportedIds` or `excludedIds`
+    supportedIds:  ["asst_zkk3O1ezwiSZOeL8fawwNM4T", "asst_u51esOrG7mUSvFatT0jfmPAy", "asst_55xDogtGtbZkA3Zxv1QMxZ2Y"]
+    # excludedIds: ["asst_excludedAssistantId"]
+  custom:
+    - name: "Mistral"
+      apiKey: "${MISTRAL_API_KEY}"
+      baseURL: "https://api.mistral.ai/v1"
+      models:
+        default: ["mistral-tiny", "mistral-small", "mistral-medium"]
+        fetch: true  # Attempt to dynamically fetch available models
+        userIdQuery: false
+      titleConvo: true
+      titleMethod: "completion"
+      titleModel: "mistral-tiny"
+      summarize: true
+      summaryModel: "mistral-summary"
+      forcePrompt: false
+      modelDisplayLabel: "Mistral AI"
+      addParams:
+        safe_prompt: true
+      dropParams:
+        - "stop"
+        - "user"
+        - "presence_penalty"
+        - "frequency_penalty"
+      # headers:
+      #    x-custom-header: "${CUSTOM_HEADER_VALUE}"
+    # - name: "OpenRouter"
+    #   apiKey: "${OPENROUTER_KEY}"
+    #   baseURL: "https://openrouter.ai/api/v1"
+    #   models:
+    #     default: ["nousresearch/nous-capybara-34b","openrouter/auto","nousresearch/nous-capybara-7b","nousresearch/nous-hermes-2-mistral-7b-dpo","google/gemma-7b-it:free","alpindale/goliath-120b","huggingfaceh4/zephyr-7b-beta","openchat/openchat-7b","gryphe/mythomist-7b","openrouter/cinematika-7b","rwkv/rwkv-5-world-3b","recursal/rwkv-5-3b-ai-town","jebcarter/psyfighter-13b","koboldai/psyfighter-13b-2","neversleep/noromaid-mixtral-8x7b-instruct","nousresearch/nous-hermes-llama2-13b","meta-llama/codellama-34b-instruct","phind/phind-codellama-34b","intel/neural-chat-7b","mistralai/mixtral-8x7b-instruct","haotian-liu/llava-13b","nousresearch/nous-hermes-2-vision-7b","meta-llama/llama-2-13b-chat","perplexity/sonar-small-chat","perplexity/sonar-medium-online","perplexity/sonar-medium-chat","perplexity/sonar-small-online","perplexity/sonar-medium-online","mistralai/mistral-large","perplexity/pplx-70b-online","perplexity/pplx-7b-online","perplexity/pplx-7b-chat","perplexity/pplx-70b-chat","meta-llama/llama-2-70b-chat","nousresearch/nous-hermes-llama2-70b","jondurbin/airoboros-l2-70b","migtissera/synthia-70b","teknium/openhermes-2-mistral-7b","teknium/openhermes-2.5-mistral-7b","pygmalionai/mythalion-13b","undi95/remm-slerp-l2-13b","xwin-lm/xwin-lm-70b","gryphe/mythomax-l2-13b-8k","undi95/toppy-m-7b","alpindale/goliath-120b","lizpreciatior/lzlv-70b-fp16-hf","neversleep/noromaid-20b","01-ai/yi-34b-chat","01-ai/yi-34b","01-ai/yi-6b","togethercomputer/stripedhyena-nous-7b","togethercomputer/stripedhyena-hessian-7b","mistralai/mixtral-8x7b","cognitivecomputations/dolphin-mixtral-8x7b","nousresearch/nous-hermes-yi-34b","anthropic/claude-2","anthropic/claude-2.0","anthropic/claude-instant-v1","anthropic/claude-instant-v1-100k","mancer/weaver","open-orca/mistral-7b-openorca","gryphe/mythomax-l2-13b"]
+    #     fetch: false
+    #   titleConvo: true
+    #   titleModel: "gpt-3.5-turbo"
+    #   summarize: false
+    #   forcePrompt: false
+    #   modelDisplayLabel: "OpenRouter"
+    #   dropParams:
+    #     - "stop"
+        # OpenRouter.ai
+    # Model list: https://openrouter.ai/models
+    # Script to fetch models: https://github.com/Multibot-AI/librechat-config-yaml/blob/main/scripts/openrouter.py
+    - name: "Perplexity"
+      apiKey: "${PERPLEXITY_API_KEY}"
+      baseURL: "https://api.perplexity.ai/"
+      models:
+        default: [ 
+          "sonar-reasoning-pro",
+          "sonar-pro",
+          "sonar-reasoning",
+          "sonar",
+          "r1-1776",
+          "sonar-deep-research"
+          ]
+        fetch: false # fetching list of models is not supported
+      titleConvo: true
+      titleModel: "llama-3.1-sonar-small-128k-online"
+      summarize: false
+      summaryModel: "llama-3.1-sonar-small-128k-online"
+      forcePrompt: false
+      # dropParams: ["stop", "user", "frequency_penalty", "presence_penalty"]
+      dropParams: ["stop", "frequency_penalty"]
+      modelDisplayLabel: "Perplexity"
+    - name: "OpenRouter"
+      apiKey: "${OPENROUTER_KEY}"
+      baseURL: "https://openrouter.ai/api/v1"
+      models:
+        default: [
+        "openrouter/auto",
+        "---FREE---",
+        "google/gemini-2.0-flash-exp:free",
+        "google/gemini-2.0-flash-thinking-exp:free",
+        "google/gemini-exp-1114:free",
+        "google/gemini-exp-1121:free",
+        "google/gemini-exp-1206:free",
+        "google/gemma-2-9b-it:free",
+        "google/learnlm-1.5-pro-experimental:free",
+        "gryphe/mythomax-l2-13b:free",
+        "huggingfaceh4/zephyr-7b-beta:free",
+        "meta-llama/llama-3-8b-instruct:free",
+        "meta-llama/llama-3.1-405b-instruct:free",
+        "meta-llama/llama-3.1-70b-instruct:free",
+        "meta-llama/llama-3.1-8b-instruct:free",
+        "meta-llama/llama-3.2-11b-vision-instruct:free",
+        "meta-llama/llama-3.2-1b-instruct:free",
+        "meta-llama/llama-3.2-3b-instruct:free",
+        "meta-llama/llama-3.2-90b-vision-instruct:free",
+        "microsoft/phi-3-medium-128k-instruct:free",
+        "microsoft/phi-3-mini-128k-instruct:free",
+        "mistralai/mistral-7b-instruct:free",
+        "openchat/openchat-7b:free",
+        "qwen/qwen-2-7b-instruct:free",
+        "undi95/toppy-m-7b:free",
+        "---NITRO---",
+        "gryphe/mythomax-l2-13b:nitro",
+        "meta-llama/llama-3-70b-instruct:nitro",
+        "meta-llama/llama-3-8b-instruct:nitro",
+        "meta-llama/llama-3.1-405b-instruct:nitro",
+        "meta-llama/llama-3.1-70b-instruct:nitro",
+        "mistralai/mistral-7b-instruct:nitro",
+        "mistralai/mixtral-8x7b-instruct:nitro",
+        "undi95/toppy-m-7b:nitro",
+        "---BETA---",
+        "anthropic/claude-2.0:beta",
+        "anthropic/claude-2.1:beta",
+        "anthropic/claude-2:beta",
+        "anthropic/claude-3-haiku:beta",
+        "anthropic/claude-3-opus:beta",
+        "anthropic/claude-3-sonnet:beta",
+        "anthropic/claude-3.5-haiku-20241022:beta",
+        "anthropic/claude-3.5-haiku:beta",
+        "anthropic/claude-3.5-sonnet-20240620:beta",
+        "anthropic/claude-3.5-sonnet:beta",
+        "---EXTENDED---",
+        "gryphe/mythomax-l2-13b:extended",
+        "meta-llama/llama-3-8b-instruct:extended",
+        "neversleep/llama-3-lumimaid-8b:extended",
+        "openai/gpt-4o:extended",
+        "undi95/remm-slerp-l2-13b:extended",
+        "---AI21---",
+        "ai21/jamba-1-5-large",
+        "ai21/jamba-1-5-mini",
+        "ai21/jamba-instruct",
+        "---AMAZON---",
+        "amazon/nova-lite-v1",
+        "amazon/nova-micro-v1",
+        "amazon/nova-pro-v1",
+        "---ANTHROPIC---",
+        "anthropic/claude-2",
+        "anthropic/claude-2.0",
+        "anthropic/claude-2.1",
+        "anthropic/claude-3-haiku",
+        "anthropic/claude-3-opus",
+        "anthropic/claude-3-sonnet",
+        "anthropic/claude-3.5-haiku",
+        "anthropic/claude-3.5-haiku-20241022",
+        "anthropic/claude-3.5-sonnet",
+        "anthropic/claude-3.5-sonnet-20240620",
+        "---COHERE---",
+        "cohere/command",
+        "cohere/command-r",
+        "cohere/command-r-03-2024",
+        "cohere/command-r-08-2024",
+        "cohere/command-r-plus",
+        "cohere/command-r-plus-04-2024",
+        "cohere/command-r-plus-08-2024",
+        "cohere/command-r7b-12-2024",
+        "---EVA-UNIT-01---",
+        "eva-unit-01/eva-llama-3.33-70b",
+        "eva-unit-01/eva-qwen-2.5-32b",
+        "eva-unit-01/eva-qwen-2.5-72b",
+        "---GOOGLE---",
+        "google/gemini-flash-1.5",
+        "google/gemini-flash-1.5-8b",
+        "google/gemini-flash-1.5-8b-exp",
+        "google/gemini-flash-1.5-exp",
+        "google/gemini-pro",
+        "google/gemini-pro-1.5",
+        "google/gemini-pro-1.5-exp",
+        "google/gemini-pro-vision",
+        "google/gemma-2-27b-it",
+        "google/gemma-2-9b-it",
+        "google/palm-2-chat-bison",
+        "google/palm-2-chat-bison-32k",
+        "google/palm-2-codechat-bison",
+        "google/palm-2-codechat-bison-32k",
+        "---META-LLAMA---",
+        "meta-llama/llama-2-13b-chat",
+        "meta-llama/llama-3-70b-instruct",
+        "meta-llama/llama-3-8b-instruct",
+        "meta-llama/llama-3.1-405b",
+        "meta-llama/llama-3.1-405b-instruct",
+        "meta-llama/llama-3.1-70b-instruct",
+        "meta-llama/llama-3.1-8b-instruct",
+        "meta-llama/llama-3.2-11b-vision-instruct",
+        "meta-llama/llama-3.2-1b-instruct",
+        "meta-llama/llama-3.2-3b-instruct",
+        "meta-llama/llama-3.2-90b-vision-instruct",
+        "meta-llama/llama-3.3-70b-instruct",
+        "meta-llama/llama-guard-2-8b",
+        "---MICROSOFT---",
+        "microsoft/phi-3-medium-128k-instruct",
+        "microsoft/phi-3-mini-128k-instruct",
+        "microsoft/phi-3.5-mini-128k-instruct",
+        "microsoft/phi-4",
+        "microsoft/wizardlm-2-7b",
+        "microsoft/wizardlm-2-8x22b",
+        "---MISTRALAI---",
+        "mistralai/codestral-mamba",
+        "mistralai/ministral-3b",
+        "mistralai/ministral-8b",
+        "mistralai/mistral-7b-instruct",
+        "mistralai/mistral-7b-instruct-v0.1",
+        "mistralai/mistral-7b-instruct-v0.2",
+        "mistralai/mistral-7b-instruct-v0.3",
+        "mistralai/mistral-large",
+        "mistralai/mistral-large-2407",
+        "mistralai/mistral-large-2411",
+        "mistralai/mistral-medium",
+        "mistralai/mistral-nemo",
+        "mistralai/mistral-small",
+        "mistralai/mistral-tiny",
+        "mistralai/mixtral-8x22b-instruct",
+        "mistralai/mixtral-8x7b",
+        "mistralai/mixtral-8x7b-instruct",
+        "mistralai/pixtral-12b",
+        "mistralai/pixtral-large-2411",
+        "---NEVERSLEEP---",
+        "neversleep/llama-3-lumimaid-70b",
+        "neversleep/llama-3-lumimaid-8b",
+        "neversleep/llama-3.1-lumimaid-70b",
+        "neversleep/llama-3.1-lumimaid-8b",
+        "neversleep/noromaid-20b",
+        "---NOUSRESEARCH---",
+        "nousresearch/hermes-2-pro-llama-3-8b",
+        "nousresearch/hermes-3-llama-3.1-405b",
+        "nousresearch/hermes-3-llama-3.1-70b",
+        "nousresearch/nous-hermes-2-mixtral-8x7b-dpo",
+        "nousresearch/nous-hermes-llama2-13b",
+        "---OPENAI---",
+        "openai/chatgpt-4o-latest",
+        "openai/gpt-3.5-turbo",
+        "openai/gpt-3.5-turbo-0125",
+        "openai/gpt-3.5-turbo-0613",
+        "openai/gpt-3.5-turbo-1106",
+        "openai/gpt-3.5-turbo-16k",
+        "openai/gpt-3.5-turbo-instruct",
+        "openai/gpt-4",
+        "openai/gpt-4-0314",
+        "openai/gpt-4-1106-preview",
+        "openai/gpt-4-32k",
+        "openai/gpt-4-32k-0314",
+        "openai/gpt-4-turbo",
+        "openai/gpt-4-turbo-preview",
+        "openai/gpt-4o",
+        "openai/gpt-4o-2024-05-13",
+        "openai/gpt-4o-2024-08-06",
+        "openai/gpt-4o-2024-11-20",
+        "openai/gpt-4o-mini",
+        "openai/gpt-4o-mini-2024-07-18",
+        "openai/o1",
+        "openai/o1-mini",
+        "openai/o1-mini-2024-09-12",
+        "openai/o1-preview",
+        "openai/o1-preview-2024-09-12",
+        "---PERPLEXITY---",
+        "perplexity/llama-3-sonar-large-32k-chat",
+        "perplexity/llama-3-sonar-large-32k-online",
+        "perplexity/llama-3-sonar-small-32k-chat",
+        "perplexity/llama-3.1-sonar-huge-128k-online",
+        "perplexity/llama-3.1-sonar-large-128k-chat",
+        "perplexity/llama-3.1-sonar-large-128k-online",
+        "perplexity/llama-3.1-sonar-small-128k-chat",
+        "perplexity/llama-3.1-sonar-small-128k-online",
+        "---QWEN---",
+        "qwen/qvq-72b-preview",
+        "qwen/qwen-2-72b-instruct",
+        "qwen/qwen-2-7b-instruct",
+        "qwen/qwen-2-vl-72b-instruct",
+        "qwen/qwen-2-vl-7b-instruct",
+        "qwen/qwen-2.5-72b-instruct",
+        "qwen/qwen-2.5-7b-instruct",
+        "qwen/qwen-2.5-coder-32b-instruct",
+        "qwen/qwq-32b-preview",
+        "---SAO10K---",
+        "sao10k/l3-euryale-70b",
+        "sao10k/l3-lunaris-8b",
+        "sao10k/l3.1-euryale-70b",
+        "sao10k/l3.3-euryale-70b",
+        "---X-AI---",
+        "x-ai/grok-2-1212",
+        "x-ai/grok-2-vision-1212",
+        "x-ai/grok-beta",
+        "x-ai/grok-vision-beta",
+        "---OTHERS---",
+        "01-ai/yi-large",
+        "aetherwiing/mn-starcannon-12b",
+        "alpindale/goliath-120b",
+        "alpindale/magnum-72b",
+        "anthracite-org/magnum-v2-72b",
+        "anthracite-org/magnum-v4-72b",
+        "cognitivecomputations/dolphin-mixtral-8x22b",
+        "cognitivecomputations/dolphin-mixtral-8x7b",
+        "databricks/dbrx-instruct",
+        "minimax/minimax-01",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-r1",
+        "deepseek/deepseek-chat-v2.5",
+        "gryphe/mythomax-l2-13b",
+        "infermatic/mn-inferor-12b",
+        "inflatebot/mn-mag-mell-r1",
+        "inflection/inflection-3-pi",
+        "inflection/inflection-3-productivity",
+        "jondurbin/airoboros-l2-70b",
+        "liquid/lfm-40b",
+        "lizpreciatior/lzlv-70b-fp16-hf",
+        "mancer/weaver",
+        "nothingiisreal/mn-celeste-12b",
+        "nvidia/llama-3.1-nemotron-70b-instruct",
+        "openchat/openchat-7b",
+        "pygmalionai/mythalion-13b",
+        "raifle/sorcererlm-8x22b",
+        "sophosympatheia/midnight-rose-70b",
+        "teknium/openhermes-2.5-mistral-7b",
+        "thedrummer/rocinante-12b",
+        "thedrummer/unslopnemo-12b",
+        "undi95/remm-slerp-l2-13b",
+        "undi95/toppy-m-7b",
+        "xwin-lm/xwin-lm-70b"
+
+          ]
+        fetch: true
+      dropParams: ["stop"]
+      titleConvo: true
+      titleModel: "gpt-3.5-turbo"
+      summarize: false
+      summaryModel: "gpt-3.5-turbo"
+      forcePrompt: false
+      modelDisplayLabel: "OpenRouter"
+    #groq
+    - name: "groq"
+      apiKey: "${GROQ_API_KEY}"
+      baseURL: "https://api.groq.com/openai/v1/"
+      models:
+        default: [
+            'llama-3.3-70b-versatile',
+            'llama-3.1-8b-instant',
+            'llama3-70b-8192',
+            'llama3-8b-8192',
+            'llama2-70b-4096',
+            'mixtral-8x7b-32768',
+            'deepseek-r1-distill-llama-70b',
+            'gemma-7b-it',
+          ]
+        fetch: true
+      titleConvo: true
+      titleModel: "mixtral-8x7b-32768"
+      summarize: false
+      summaryModel: "mixtral-8x7b-32768"
+      forcePrompt: false
+      modelDisplayLabel: "groq"
+
+    - name: "xai"
+      apiKey: "${XAI_API_KEY}"
+      baseURL: "https://api.x.ai/v1"
+      models:
+        default: ["grok-3-mini"]
+        fetch: true
+      titleConvo: true
+      titleMethod: "completion"
+      titleModel: "grok-3-mini"
+      summarize: false
+      summaryModel: "grok-3-mini"
+      forcePrompt: false
+      modelDisplayLabel: "Grok"
+
+# Memory configuration for user memories
+# memory:
+#   # (optional) Disable memory functionality
+#   disabled: false
+#   # (optional) Restrict memory keys to specific values to limit memory storage and improve consistency
+#   validKeys: ["preferences", "work_info", "personal_info", "skills", "interests", "context"]
+#   # (optional) Maximum token limit for memory storage (not yet implemented for token counting)
+#   tokenLimit: 10000
+#   # (optional) Enable personalization features (defaults to true if memory is configured)
+#   # When false, users will not see the Personalization tab in settings
+#   personalize: true
+#   # Memory agent configuration - either use an existing agent by ID or define inline
+#   agent:
+#     # Option 1: Use existing agent by ID
+#     id: "your-memory-agent-id"
+#     # Option 2: Define agent inline
+#     # provider: "openai"
+#     # model: "gpt-4o-mini"
+#     # instructions: "You are a memory management assistant. Store and manage user information accurately."
+#     # model_parameters:
+#     #   temperature: 0.1
+
+   
