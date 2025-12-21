@@ -685,9 +685,9 @@ endpoints:
       modelDisplayLabel: "Grok"
 
 # Memory configuration for user memories
-# memory:
-#   # (optional) Disable memory functionality
-#   disabled: false
+memory:
+  # (optional) Disable memory functionality
+  disabled: true
 #   # (optional) Restrict memory keys to specific values to limit memory storage and improve consistency
 #   validKeys: ["preferences", "work_info", "personal_info", "skills", "interests", "context"]
 #   # (optional) Maximum token limit for memory storage (not yet implemented for token counting)
