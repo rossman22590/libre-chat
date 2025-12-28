@@ -22,10 +22,10 @@ interface:
     modalTitle: 'Terms of Service for Multibot'
     modalContent: |
       # MULTIBOT TERMS OF SERVICE
-      *Last Updated: December 2025*
+      *Last Updated: December 28th 2025*
 
       ## 1. Introduction
-      Welcome to Multibot! Your use of our services, including the services we make available through this website and all related web sites, mobile sites, data files, visualizations and applications which link to these terms of service (the “Site”) and to all software or services offered by us in connection with any of those (collectively, the “Services”), is governed by these terms of service (the “Terms”), so please carefully read them before using the Services. For the purposes of these Terms, “we,” “our,” “us,” and “Multibot” refer to Multibot, the providers and operators of the Services.
+      Welcome to Multibot! Multibot is one of the applications included in the AI Tutor subscription. Your use of our services, including the services we make available through this website and all related web sites, mobile sites, data files, visualizations and applications which link to these terms of service (the “Site”) and to all software or services offered by us in connection with any of those (collectively, the “Services”), is governed by these terms of service (the “Terms”), so please carefully read them before using the Services. For the purposes of these Terms, “we,” “our,” “us,” and “Multibot” refer to Multibot, the providers and operators of the Services.
 
       In order to use the Services, you must first agree to these Terms. If you are registering for or using the Services on behalf of an organization, you are agreeing to these Terms for that organization and promising that you have the authority to bind that organization to these Terms. In that case, “you” and “your” will also refer to that organization, wherever possible.
 
@@ -862,21 +862,21 @@ endpoints:
       modelDisplayLabel: "Grok"
 
 
-# # Memory configuration for user memories
-# memory:
-#   # (optional) Disable memory functionality
-#   disabled: true
-#   # (optional) Restrict memory keys to specific values to limit memory storage and improve consistency
-#   # validKeys: ["preferences", "work_info", "personal_info", "skills", "interests", "context"]
-#   # (optional) Maximum token limit for memory storage (not yet implemented for token counting)
-#   tokenLimit: 10000
-#   # (optional) Enable personalization features (defaults to true if memory is configured)
-#   # When false, users will not see the Personalization tab in settings
-#   personalize: true
-#   # Memory agent configuration - either use an existing agent by ID or define inline
-#   agent:
-#     provider: "openAI"
-#     model: "gpt-5-chat-latest"
-#   #   instructions: "You are a memory management assistant. Store and manage user information accurately."
-#   #   model_parameters:
-#   #     temperature: 0.1
+# Memory configuration for user memories
+memory:
+  # (optional) Disable memory functionality
+  disabled: true
+  # (optional) Restrict memory keys to specific values to limit memory storage and improve consistency
+  # validKeys: ["preferences", "work_info", "personal_info", "skills", "interests", "context"]
+  # (optional) Maximum token limit for memory storage (not yet implemented for token counting)
+  tokenLimit: 10000
+  # (optional) Enable personalization features (defaults to true if memory is configured)
+  # When false, users will not see the Personalization tab in settings
+  personalize: true
+  # Memory agent configuration - either use an existing agent by ID or define inline
+  agent:
+    provider: "openAI"
+    model: "gpt-5-chat-latest"
+  #   instructions: "You are a memory management assistant. Store and manage user information accurately."
+  #   model_parameters:
+  #     temperature: 0.1
