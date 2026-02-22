@@ -1,6 +1,6 @@
 version: 1.2.1
 cache: true
-# fileStrategy: "firebase"  # If using Firebase CDN
+fileStrategy: "firebase"  # If using Firebase CDN
 
 # Custom interface configuration
 interface:
