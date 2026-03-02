@@ -105,13 +105,14 @@ const checkBan = async (req, res, next = () => {}) => {
       userBan = await banLogs.get(userId);
     }
 
-    const isBanned = !!(ipBan || userBan);
+    const banEntry = ipBan || userBan;
+    const isBanned = !!banEntry;
 
     if (!isBanned) {
       return next();
     }
 
-    const timeLeft = Number(isBanned.expiresAt) - Date.now();
+    const timeLeft = Number(banEntry.expiresAt) - Date.now();
 
     if (timeLeft <= 0 && ipKey) {
       await banLogs.delete(ipKey);
