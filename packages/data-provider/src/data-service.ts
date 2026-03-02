@@ -127,6 +127,10 @@ export function getBalanceTransactions(limit?: number): Promise<t.TBalanceTransa
   return request.get(endpoints.balanceTransactions(limit));
 }
 
+export function getAdminStats(): Promise<t.TAdminStatsResponse> {
+  return request.get(endpoints.adminStats());
+}
+
 export function getAdminUsers(params?: {
   page?: number;
   pageSize?: number;
@@ -142,6 +146,13 @@ export function setAdminUserBalance(
   return request.put(endpoints.adminUserBalance(userId), { amount });
 }
 
+export function addAdminUserBalance(
+  userId: string,
+  amount: number,
+): Promise<{ tokenCredits: number }> {
+  return request.post(endpoints.adminUserBalanceAdd(userId), { amount });
+}
+
 export function banAdminUser(
   userId: string,
   durationMinutes: number,
@@ -151,6 +162,28 @@ export function banAdminUser(
 
 export function unbanAdminUser(userId: string): Promise<{ banned: boolean }> {
   return request.delete(endpoints.adminUserBan(userId));
+}
+
+export function getAdminUserConversations(
+  userId: string,
+  params?: { cursor?: string; limit?: number; sortBy?: string; sortDirection?: string },
+): Promise<q.ConversationListResponse> {
+  return request.get(endpoints.adminUserConversations(userId, params));
+}
+
+export function getAdminUserConversationMessages(
+  userId: string,
+  conversationId: string,
+  params?: { limit?: number },
+): Promise<q.MessagesListResponse> {
+  return request.get(endpoints.adminUserConversationMessages(userId, conversationId, params));
+}
+
+export function getAdminUserTransactions(
+  userId: string,
+  params?: { limit?: number },
+): Promise<t.TBalanceTransactionsResponse> {
+  return request.get(endpoints.adminUserTransactions(userId, params));
 }
 
 export const updateTokenCount = (text: string) => {

@@ -50,6 +50,7 @@ export const balanceTransactions = (limit?: number) => {
 };
 
 const adminRoot = () => `${BASE_URL}/api/admin`;
+export const adminStats = () => `${adminRoot()}/stats`;
 export const adminUsers = (params?: { page?: number; pageSize?: number; search?: string }) => {
   const searchParams = new URLSearchParams();
   if (params?.page != null) searchParams.set('page', String(params.page));
@@ -59,7 +60,36 @@ export const adminUsers = (params?: { page?: number; pageSize?: number; search?:
   return `${adminRoot()}/users${q ? `?${q}` : ''}`;
 };
 export const adminUserBalance = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/balance`;
+export const adminUserBalanceAdd = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/balance/add`;
 export const adminUserBan = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/ban`;
+export const adminUserTransactions = (userId: string, params?: { limit?: number }) => {
+  const searchParams = new URLSearchParams();
+  if (params?.limit != null) searchParams.set('limit', String(params.limit));
+  const q = searchParams.toString();
+  return `${adminRoot()}/users/${encodeURIComponent(userId)}/transactions${q ? `?${q}` : ''}`;
+};
+export const adminUserConversations = (
+  userId: string,
+  params?: { cursor?: string; limit?: number; sortBy?: string; sortDirection?: string },
+) => {
+  const searchParams = new URLSearchParams();
+  if (params?.cursor != null) searchParams.set('cursor', params.cursor);
+  if (params?.limit != null) searchParams.set('limit', String(params.limit));
+  if (params?.sortBy != null) searchParams.set('sortBy', params.sortBy);
+  if (params?.sortDirection != null) searchParams.set('sortDirection', params.sortDirection);
+  const q = searchParams.toString();
+  return `${adminRoot()}/users/${encodeURIComponent(userId)}/conversations${q ? `?${q}` : ''}`;
+};
+export const adminUserConversationMessages = (
+  userId: string,
+  conversationId: string,
+  params?: { limit?: number },
+) => {
+  const searchParams = new URLSearchParams();
+  if (params?.limit != null) searchParams.set('limit', String(params.limit));
+  const q = searchParams.toString();
+  return `${adminRoot()}/users/${encodeURIComponent(userId)}/conversations/${encodeURIComponent(conversationId)}/messages${q ? `?${q}` : ''}`;
+};
 
 export const userPlugins = () => `${BASE_URL}/api/user/plugins`;
 

@@ -707,6 +707,13 @@ export type TAdminUserItem = {
   role?: string;
   createdAt?: string;
   tokenCredits: number;
+  conversationCount?: number;
+  isBanned?: boolean;
+};
+
+export type TAdminStatsResponse = {
+  totalUsers: number;
+  recentSignups: number;
 };
 
 export type TAdminUsersResponse = {

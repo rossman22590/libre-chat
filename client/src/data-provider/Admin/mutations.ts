@@ -14,6 +14,20 @@ export const useSetAdminUserBalanceMutation = () => {
   );
 };
 
+export const useAddAdminUserBalanceMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation(
+    ({ userId, amount }: { userId: string; amount: number }) =>
+      dataService.addAdminUserBalance(userId, amount),
+    {
+      onSuccess: (_, variables) => {
+        queryClient.invalidateQueries([QueryKeys.adminUsers]);
+        queryClient.invalidateQueries([QueryKeys.adminUserTransactions, variables.userId]);
+      },
+    },
+  );
+};
+
 export const useBanAdminUserMutation = () => {
   const queryClient = useQueryClient();
   return useMutation(
