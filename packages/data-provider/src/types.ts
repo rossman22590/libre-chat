@@ -684,3 +684,17 @@ export type TBalanceResponse = {
   lastRefill?: Date;
   refillAmount?: number;
 };
+
+export type TBalanceTransactionItem = {
+  _id: string;
+  context?: string;
+  tokenType: 'prompt' | 'completion' | 'credits';
+  rawAmount?: number;
+  tokenValue?: number;
+  model?: string;
+  createdAt?: string;
+};
+
+export type TBalanceTransactionsResponse = {
+  transactions: TBalanceTransactionItem[];
+};

@@ -123,6 +123,10 @@ export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
 }
 
+export function getBalanceTransactions(limit?: number): Promise<t.TBalanceTransactionsResponse> {
+  return request.get(endpoints.balanceTransactions(limit));
+}
+
 export const updateTokenCount = (text: string) => {
   return request.post(endpoints.tokenizer(), { arg: text });
 };
