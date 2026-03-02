@@ -4,6 +4,7 @@ const { logger } = require('@librechat/data-schemas');
 const {
   countTokens,
   getBalanceConfig,
+  buildMessageFiles,
   extractFileContext,
   encodeAndFormatAudios,
   encodeAndFormatVideos,
@@ -18,7 +19,9 @@ const {
   EModelEndpoint,
   isParamEndpoint,
   isAgentsEndpoint,
+  isEphemeralAgentId,
   supportsBalanceCheck,
+  isBedrockDocumentType,
 } = require('librechat-data-provider');
 const {
   updateMessage,
@@ -121,7 +124,9 @@ class BaseClient {
    * @returns {number}
    */
   getTokenCountForResponse(responseMessage) {
-    logger.debug('[BaseClient] `recordTokenUsage` not implemented.', responseMessage);
+    logger.debug('[BaseClient] `recordTokenUsage` not implemented.', {
+      messageId: responseMessage?.messageId,
+    });
   }
 
   /**
@@ -132,12 +137,14 @@ class BaseClient {
    * @param {AppConfig['balance']} [balance]
    * @param {number} promptTokens
    * @param {number} completionTokens
+   * @param {string} [messageId]
    * @returns {Promise<void>}
    */
-  async recordTokenUsage({ model, balance, promptTokens, completionTokens }) {
+  async recordTokenUsage({ model, balance, promptTokens, completionTokens, messageId }) {
     logger.debug('[BaseClient] `recordTokenUsage` not implemented.', {
       model,
       balance,
+      messageId,
       promptTokens,
       completionTokens,
     });
@@ -658,16 +665,27 @@ class BaseClient {
     );
 
     if (tokenCountMap) {
-      logger.debug('[BaseClient] tokenCountMap', tokenCountMap);
       if (tokenCountMap[userMessage.messageId]) {
         userMessage.tokenCount = tokenCountMap[userMessage.messageId];
-        logger.debug('[BaseClient] userMessage', userMessage);
+        logger.debug('[BaseClient] userMessage', {
+          messageId: userMessage.messageId,
+          tokenCount: userMessage.tokenCount,
+          conversationId: userMessage.conversationId,
+        });
       }
 
       this.handleTokenCountMap(tokenCountMap);
     }
 
     if (!isEdited && !this.skipSaveUserMessage) {
+      const reqFiles = this.options.req?.body?.files;
+      if (reqFiles && Array.isArray(this.options.attachments)) {
+        const files = buildMessageFiles(reqFiles, this.options.attachments);
+        if (files.length > 0) {
+          userMessage.files = files;
+        }
+        delete userMessage.image_urls;
+      }
       userMessagePromise = this.saveMessageToDatabase(userMessage, saveOptions, user);
       this.savedMessageIds.add(userMessage.messageId);
       if (typeof opts?.getReqData === 'function') {
@@ -714,7 +732,7 @@ class BaseClient {
       iconURL: this.options.iconURL,
       endpoint: this.options.endpoint,
       ...(this.metadata ?? {}),
-      metadata,
+      metadata: Object.keys(metadata ?? {}).length > 0 ? metadata : undefined,
     };
 
     if (typeof completion === 'string') {
@@ -779,9 +797,18 @@ class BaseClient {
           promptTokens,
           completionTokens,
           balance: balanceConfig,
-          model: responseMessage.model,
+          /** Note: When using agents, responseMessage.model is the agent ID, not the model */
+          model: this.model,
+          messageId: this.responseMessageId,
         });
       }
+
+      logger.debug('[BaseClient] Response token usage', {
+        messageId: responseMessage.messageId,
+        model: responseMessage.model,
+        promptTokens,
+        completionTokens,
+      });
     }
 
     if (userMessagePromise) {
@@ -937,6 +964,7 @@ class BaseClient {
       throw new Error('User mismatch.');
     }
 
+    const hasAddedConvo = this.options?.req?.body?.addedConvo != null;
     const savedMessage = await saveMessage(
       this.options?.req,
       {
@@ -944,6 +972,7 @@ class BaseClient {
         endpoint: this.options.endpoint,
         unfinished: false,
         user,
+        ...(hasAddedConvo && { addedConvo: true }),
       },
       { context: 'api/app/clients/BaseClient.js - saveMessageToDatabase #saveMessage' },
     );
@@ -969,7 +998,7 @@ class BaseClient {
     const hasNonEphemeralAgent =
       isAgentsEndpoint(this.options.endpoint) &&
       endpointOptions?.agent_id &&
-      endpointOptions.agent_id !== Constants.EPHEMERAL_AGENT_ID;
+      !isEphemeralAgentId(endpointOptions.agent_id);
     if (hasNonEphemeralAgent) {
       exceptions.add('model');
     }
@@ -1024,7 +1053,8 @@ class BaseClient {
    * @param {Object} options - The options for the function.
    * @param {TMessage[]} options.messages - An array of message objects. Each object should have either an 'id' or 'messageId' property, and may have a 'parentMessageId' property.
    * @param {string} options.parentMessageId - The ID of the parent message to start the traversal from.
-   * @param {Function} [options.mapMethod] - An optional function to map over the ordered messages. If provided, it will be applied to each message in the resulting array.
+   * @param {Function} [options.mapMethod] - An optional function to map over the ordered messages. Applied conditionally based on mapCondition.
+   * @param {(message: TMessage) => boolean} [options.mapCondition] - An optional function to determine whether mapMethod should be applied to a given message. If not provided and mapMethod is set, mapMethod applies to all messages.
    * @param {boolean} [options.summary=false] - If set to true, the traversal modifies messages with 'summary' and 'summaryTokenCount' properties and stops at the message with a 'summary' property.
    * @returns {TMessage[]} An array containing the messages in the order they should be displayed, starting with the most recent message with a 'summary' property if the 'summary' option is true, and ending with the message identified by 'parentMessageId'.
    */
@@ -1032,6 +1062,7 @@ class BaseClient {
     messages,
     parentMessageId,
     mapMethod = null,
+    mapCondition = null,
     summary = false,
   }) {
     if (!messages || messages.length === 0) {
@@ -1066,7 +1097,9 @@ class BaseClient {
         message.tokenCount = message.summaryTokenCount;
       }
 
-      orderedMessages.push(message);
+      const shouldMap = mapMethod != null && (mapCondition != null ? mapCondition(message) : true);
+      const processedMessage = shouldMap ? mapMethod(message) : message;
+      orderedMessages.push(processedMessage);
 
       if (summary && message.summary) {
         break;
@@ -1077,11 +1110,6 @@ class BaseClient {
     }
 
     orderedMessages.reverse();
-
-    if (mapMethod) {
-      return orderedMessages.map(mapMethod);
-    }
-
     return orderedMessages;
   }
 
@@ -1298,6 +1326,9 @@ class BaseClient {
 
     const allFiles = [];
 
+    const provider = this.options.agent?.provider ?? this.options.endpoint;
+    const isBedrock = provider === EModelEndpoint.bedrock;
+
     for (const file of attachments) {
       /** @type {FileSources} */
       const source = file.source ?? FileSources.local;
@@ -1313,6 +1344,9 @@ class BaseClient {
       if (file.type.startsWith('image/')) {
         categorizedAttachments.images.push(file);
       } else if (file.type === 'application/pdf') {
+        categorizedAttachments.documents.push(file);
+        allFiles.push(file);
+      } else if (isBedrock && isBedrockDocumentType(file.type)) {
         categorizedAttachments.documents.push(file);
         allFiles.push(file);
       } else if (file.type.startsWith('video/')) {

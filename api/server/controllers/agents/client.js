@@ -1,21 +1,28 @@
 require('events').EventEmitter.defaultMaxListeners = 100;
 const { logger } = require('@librechat/data-schemas');
-const { DynamicStructuredTool } = require('@langchain/core/tools');
 const { getBufferString, HumanMessage } = require('@langchain/core/messages');
 const {
   createRun,
   Tokenizer,
   checkAccess,
-  logAxiosError,
+  buildToolSet,
   sanitizeTitle,
+  logToolError,
+  payloadParser,
   resolveHeaders,
   createSafeUser,
   initializeAgent,
   getBalanceConfig,
+  omitTitleOptions,
   getProviderConfig,
   memoryInstructions,
+  createTokenCounter,
+  applyContextToAgent,
+  recordCollectedUsage,
+  GenerationJobManager,
   getTransactionsConfig,
   createMemoryProcessor,
+  createMultiAgentMapper,
   filterMalformedContentParts,
 } = require('@librechat/api');
 const {
@@ -23,9 +30,7 @@ const {
   Providers,
   TitleMethod,
   formatMessage,
-  labelContentByAgent,
   formatAgentMessages,
-  getTokenCountForMessage,
   createMetadataAggregator,
 } = require('@librechat/agents');
 const {
@@ -36,119 +41,20 @@ const {
   EModelEndpoint,
   PermissionTypes,
   isAgentsEndpoint,
-  AgentCapabilities,
-  bedrockInputSchema,
+  isEphemeralAgentId,
   removeNullishValues,
 } = require('librechat-data-provider');
 const { spendTokens, spendStructuredTokens } = require('~/models/spendTokens');
 const { encodeAndFormat } = require('~/server/services/Files/images/encode');
+const { updateBalance, bulkInsertTransactions } = require('~/models');
+const { getMultiplier, getCacheMultiplier } = require('~/models/tx');
 const { createContextHandlers } = require('~/app/clients/prompts');
-const { checkCapability } = require('~/server/services/Config');
 const { getConvoFiles } = require('~/models/Conversation');
 const BaseClient = require('~/app/clients/BaseClient');
 const { getRoleByName } = require('~/models/Role');
 const { loadAgent } = require('~/models/Agent');
 const { getMCPManager } = require('~/config');
 const db = require('~/models');
-
-const omitTitleOptions = new Set([
-  'stream',
-  'thinking',
-  'streaming',
-  'clientOptions',
-  'thinkingConfig',
-  'thinkingBudget',
-  'includeThoughts',
-  'maxOutputTokens',
-  'additionalModelRequestFields',
-]);
-
-/**
- * @param {ServerRequest} req
- * @param {Agent} agent
- * @param {string} endpoint
- */
-const payloadParser = ({ req, agent, endpoint }) => {
-  if (isAgentsEndpoint(endpoint)) {
-    return { model: undefined };
-  } else if (endpoint === EModelEndpoint.bedrock) {
-    const parsedValues = bedrockInputSchema.parse(agent.model_parameters);
-    if (parsedValues.thinking == null) {
-      parsedValues.thinking = false;
-    }
-    return parsedValues;
-  }
-  return req.body.endpointOption.model_parameters;
-};
-
-function createTokenCounter(encoding) {
-  return function (message) {
-    const countTokens = (text) => Tokenizer.getTokenCount(text, encoding);
-    return getTokenCountForMessage(message, countTokens);
-  };
-}
-
-function logToolError(graph, error, toolId) {
-  logAxiosError({
-    error,
-    message: `[api/server/controllers/agents/client.js #chatCompletion] Tool Error "${toolId}"`,
-  });
-}
-
-/**
- * Applies agent labeling to conversation history when multi-agent patterns are detected.
- * Labels content parts by their originating agent to prevent identity confusion.
- *
- * @param {TMessage[]} orderedMessages - The ordered conversation messages
- * @param {Agent} primaryAgent - The primary agent configuration
- * @param {Map<string, Agent>} agentConfigs - Map of additional agent configurations
- * @returns {TMessage[]} Messages with agent labels applied where appropriate
- */
-function applyAgentLabelsToHistory(orderedMessages, primaryAgent, agentConfigs) {
-  const shouldLabelByAgent = (primaryAgent.edges?.length ?? 0) > 0 || (agentConfigs?.size ?? 0) > 0;
-
-  if (!shouldLabelByAgent) {
-    return orderedMessages;
-  }
-
-  const processedMessages = [];
-
-  for (let i = 0; i < orderedMessages.length; i++) {
-    const message = orderedMessages[i];
-
-    /** @type {Record<string, string>} */
-    const agentNames = { [primaryAgent.id]: primaryAgent.name || 'Assistant' };
-
-    if (agentConfigs) {
-      for (const [agentId, agentConfig] of agentConfigs.entries()) {
-        agentNames[agentId] = agentConfig.name || agentConfig.id;
-      }
-    }
-
-    if (
-      !message.isCreatedByUser &&
-      message.metadata?.agentIdMap &&
-      Array.isArray(message.content)
-    ) {
-      try {
-        const labeledContent = labelContentByAgent(
-          message.content,
-          message.metadata.agentIdMap,
-          agentNames,
-        );
-
-        processedMessages.push({ ...message, content: labeledContent });
-      } catch (error) {
-        logger.error('[AgentClient] Error applying agent labels to message:', error);
-        processedMessages.push(message);
-      }
-    } else {
-      processedMessages.push(message);
-    }
-  }
-
-  return processedMessages;
-}
 
 class AgentClient extends BaseClient {
   constructor(options = {}) {
@@ -199,8 +105,6 @@ class AgentClient extends BaseClient {
     this.indexTokenCountMap = {};
     /** @type {(messages: BaseMessage[]) => Promise<void>} */
     this.processMemory;
-    /** @type {Record<number, string> | null} */
-    this.agentIdMap = null;
   }
 
   /**
@@ -210,9 +114,7 @@ class AgentClient extends BaseClient {
     return this.contentParts;
   }
 
-  setOptions(options) {
-    logger.info('[api/server/controllers/agents/client.js] setOptions', options);
-  }
+  setOptions(_options) {}
 
   /**
    * `AgentClient` is not opinionated about vision requests, so we don't do anything here
@@ -221,14 +123,9 @@ class AgentClient extends BaseClient {
   checkVisionRequest() {}
 
   getSaveOptions() {
-    // TODO:
-    // would need to be override settings; otherwise, model needs to be undefined
-    // model: this.override.model,
-    // instructions: this.override.instructions,
-    // additional_instructions: this.override.additional_instructions,
     let runOptions = {};
     try {
-      runOptions = payloadParser(this.options);
+      runOptions = payloadParser(this.options) ?? {};
     } catch (error) {
       logger.error(
         '[api/server/controllers/agents/client.js #getSaveOptions] Error parsing options',
@@ -239,14 +136,14 @@ class AgentClient extends BaseClient {
     return removeNullishValues(
       Object.assign(
         {
+          spec: this.options.spec,
+          iconURL: this.options.iconURL,
           endpoint: this.options.endpoint,
           agent_id: this.options.agent.id,
           modelLabel: this.options.modelLabel,
-          maxContextTokens: this.options.maxContextTokens,
           resendFiles: this.options.resendFiles,
           imageDetail: this.options.imageDetail,
-          spec: this.options.spec,
-          iconURL: this.options.iconURL,
+          maxContextTokens: this.maxContextTokens,
         },
         // TODO: PARSE OPTIONS BY PROVIDER, MAY CONTAIN SENSITIVE DATA
         runOptions,
@@ -254,11 +151,13 @@ class AgentClient extends BaseClient {
     );
   }
 
+  /**
+   * Returns build message options. For AgentClient, agent-specific instructions
+   * are retrieved directly from agent objects in buildMessages, so this returns empty.
+   * @returns {Object} Empty options object
+   */
   getBuildMessagesOptions() {
-    return {
-      instructions: this.options.agent.instructions,
-      additional_instructions: this.options.agent.additional_instructions,
-    };
+    return {};
   }
 
   /**
@@ -281,33 +180,43 @@ class AgentClient extends BaseClient {
     return files;
   }
 
-  async buildMessages(
-    messages,
-    parentMessageId,
-    { instructions = null, additional_instructions = null },
-    opts,
-  ) {
-    let orderedMessages = this.constructor.getMessagesForConversation({
+  async buildMessages(messages, parentMessageId, _buildOptions, opts) {
+    /** Always pass mapMethod; getMessagesForConversation applies it only to messages with addedConvo flag */
+    const orderedMessages = this.constructor.getMessagesForConversation({
       messages,
       parentMessageId,
       summary: this.shouldSummarize,
+      mapMethod: createMultiAgentMapper(this.options.agent, this.agentConfigs),
+      mapCondition: (message) => message.addedConvo === true,
     });
-
-    orderedMessages = applyAgentLabelsToHistory(
-      orderedMessages,
-      this.options.agent,
-      this.agentConfigs,
-    );
 
     let payload;
     /** @type {number | undefined} */
     let promptTokens;
 
-    /** @type {string} */
-    let systemContent = [instructions ?? '', additional_instructions ?? '']
-      .filter(Boolean)
-      .join('\n')
-      .trim();
+    /**
+     * Extract base instructions for all agents (combines instructions + additional_instructions).
+     * This must be done before applying context to preserve the original agent configuration.
+     */
+    const extractBaseInstructions = (agent) => {
+      const baseInstructions = [agent.instructions ?? '', agent.additional_instructions ?? '']
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+      agent.instructions = baseInstructions;
+      return agent;
+    };
+
+    /** Collect all agents for unified processing, extracting base instructions during collection */
+    const allAgents = [
+      { agent: extractBaseInstructions(this.options.agent), agentId: this.options.agent.id },
+      ...(this.agentConfigs?.size > 0
+        ? Array.from(this.agentConfigs.entries()).map(([agentId, agent]) => ({
+            agent: extractBaseInstructions(agent),
+            agentId,
+          }))
+        : []),
+    ];
 
     if (this.options.attachments) {
       const attachments = await this.options.attachments;
@@ -342,6 +251,7 @@ class AgentClient extends BaseClient {
         assistantName: this.options?.modelLabel,
       });
 
+      /** For non-latest messages, prepend file context directly to message content */
       if (message.fileContext && i !== orderedMessages.length - 1) {
         if (typeof formattedMessage.content === 'string') {
           formattedMessage.content = message.fileContext + '\n' + formattedMessage.content;
@@ -351,8 +261,6 @@ class AgentClient extends BaseClient {
             ? (textPart.text = message.fileContext + '\n' + textPart.text)
             : formattedMessage.content.unshift({ type: 'text', text: message.fileContext });
         }
-      } else if (message.fileContext && i === orderedMessages.length - 1) {
-        systemContent = [systemContent, message.fileContext].join('\n');
       }
 
       const needsTokenCount =
@@ -385,45 +293,34 @@ class AgentClient extends BaseClient {
       return formattedMessage;
     });
 
+    /**
+     * Build shared run context - applies to ALL agents in the run.
+     * This includes: file context (latest message), augmented prompt (RAG), memory context.
+     */
+    const sharedRunContextParts = [];
+
+    /** File context from the latest message (attachments) */
+    const latestMessage = orderedMessages[orderedMessages.length - 1];
+    if (latestMessage?.fileContext) {
+      sharedRunContextParts.push(latestMessage.fileContext);
+    }
+
+    /** Augmented prompt from RAG/context handlers */
     if (this.contextHandlers) {
       this.augmentedPrompt = await this.contextHandlers.createContext();
-      systemContent = this.augmentedPrompt + systemContent;
-    }
-
-    // Inject MCP server instructions if available
-    const ephemeralAgent = this.options.req.body.ephemeralAgent;
-    let mcpServers = [];
-
-    // Check for ephemeral agent MCP servers
-    if (ephemeralAgent && ephemeralAgent.mcp && ephemeralAgent.mcp.length > 0) {
-      mcpServers = ephemeralAgent.mcp;
-    }
-    // Check for regular agent MCP tools
-    else if (this.options.agent && this.options.agent.tools) {
-      mcpServers = this.options.agent.tools
-        .filter(
-          (tool) =>
-            tool instanceof DynamicStructuredTool && tool.name.includes(Constants.mcp_delimiter),
-        )
-        .map((tool) => tool.name.split(Constants.mcp_delimiter).pop())
-        .filter(Boolean);
-    }
-
-    if (mcpServers.length > 0) {
-      try {
-        const mcpInstructions = await getMCPManager().formatInstructionsForContext(mcpServers);
-        if (mcpInstructions) {
-          systemContent = [systemContent, mcpInstructions].filter(Boolean).join('\n\n');
-          logger.debug('[AgentClient] Injected MCP instructions for servers:', mcpServers);
-        }
-      } catch (error) {
-        logger.error('[AgentClient] Failed to inject MCP instructions:', error);
+      if (this.augmentedPrompt) {
+        sharedRunContextParts.push(this.augmentedPrompt);
       }
     }
 
-    if (systemContent) {
-      this.options.agent.instructions = systemContent;
+    /** Memory context (user preferences/memories) */
+    const withoutKeys = await this.useMemory();
+    if (withoutKeys) {
+      const memoryContext = `${memoryInstructions}\n\n# Existing memory about the user:\n${withoutKeys}`;
+      sharedRunContextParts.push(memoryContext);
     }
+
+    const sharedRunContext = sharedRunContextParts.join('\n\n');
 
     /** @type {Record<string, number> | undefined} */
     let tokenCountMap;
@@ -450,14 +347,27 @@ class AgentClient extends BaseClient {
       opts.getReqData({ promptTokens });
     }
 
-    const withoutKeys = await this.useMemory();
-    if (withoutKeys) {
-      systemContent += `${memoryInstructions}\n\n# Existing memory about the user:\n${withoutKeys}`;
-    }
-
-    if (systemContent) {
-      this.options.agent.instructions = systemContent;
-    }
+    /**
+     * Apply context to all agents.
+     * Each agent gets: shared run context + their own base instructions + their own MCP instructions.
+     *
+     * NOTE: This intentionally mutates agent objects in place. The agentConfigs Map
+     * holds references to config objects that will be passed to the graph runtime.
+     */
+    const ephemeralAgent = this.options.req.body.ephemeralAgent;
+    const mcpManager = getMCPManager();
+    await Promise.all(
+      allAgents.map(({ agent, agentId }) =>
+        applyContextToAgent({
+          agent,
+          agentId,
+          logger,
+          mcpManager,
+          sharedRunContext,
+          ephemeralAgent: agentId === this.options.agent.id ? ephemeralAgent : undefined,
+        }),
+      ),
+    );
 
     return result;
   }
@@ -529,6 +439,8 @@ class AgentClient extends BaseClient {
           agent_id: memoryConfig.agent.id,
           endpoint: EModelEndpoint.agents,
         });
+      } else if (memoryConfig.agent?.id != null) {
+        prelimAgent = this.options.agent;
       } else if (
         memoryConfig.agent?.id == null &&
         memoryConfig.agent?.model != null &&
@@ -543,6 +455,10 @@ class AgentClient extends BaseClient {
       );
     }
 
+    if (!prelimAgent) {
+      return;
+    }
+
     const agent = await initializeAgent(
       {
         req: this.options.req,
@@ -550,10 +466,9 @@ class AgentClient extends BaseClient {
         agent: prelimAgent,
         allowedProviders,
         endpointOption: {
-          endpoint:
-            prelimAgent.id !== Constants.EPHEMERAL_AGENT_ID
-              ? EModelEndpoint.agents
-              : memoryConfig.agent?.provider,
+          endpoint: !isEphemeralAgentId(prelimAgent.id)
+            ? EModelEndpoint.agents
+            : memoryConfig.agent?.provider,
         },
       },
       {
@@ -563,6 +478,7 @@ class AgentClient extends BaseClient {
         updateFilesUsage: db.updateFilesUsage,
         getUserKeyValues: db.getUserKeyValues,
         getToolFilesByIds: db.getToolFilesByIds,
+        getCodeGeneratedFiles: db.getCodeGeneratedFiles,
       },
     );
 
@@ -593,10 +509,12 @@ class AgentClient extends BaseClient {
     const userId = this.options.req.user.id + '';
     const messageId = this.responseMessageId + '';
     const conversationId = this.conversationId + '';
+    const streamId = this.options.req?._resumableStreamId || null;
     const [withoutKeys, processMemory] = await createMemoryProcessor({
       userId,
       config,
       messageId,
+      streamId,
       conversationId,
       memoryMethods: {
         setMemory: db.setMemory,
@@ -604,6 +522,7 @@ class AgentClient extends BaseClient {
         getFormattedMemories: db.getFormattedMemories,
       },
       res: this.options.res,
+      user: createSafeUser(this.options.req.user),
     });
 
     this.processMemory = processMemory;
@@ -690,9 +609,7 @@ class AgentClient extends BaseClient {
     });
 
     const completion = filterMalformedContentParts(this.contentParts);
-    const metadata = this.agentIdMap ? { agentIdMap: this.agentIdMap } : undefined;
-
-    return { completion, metadata };
+    return { completion };
   }
 
   /**
@@ -710,78 +627,29 @@ class AgentClient extends BaseClient {
     context = 'message',
     collectedUsage = this.collectedUsage,
   }) {
-    if (!collectedUsage || !collectedUsage.length) {
-      return;
-    }
-    const input_tokens =
-      (collectedUsage[0]?.input_tokens || 0) +
-      (Number(collectedUsage[0]?.input_token_details?.cache_creation) || 0) +
-      (Number(collectedUsage[0]?.input_token_details?.cache_read) || 0);
-
-    let output_tokens = 0;
-    let previousTokens = input_tokens; // Start with original input
-    for (let i = 0; i < collectedUsage.length; i++) {
-      const usage = collectedUsage[i];
-      if (!usage) {
-        continue;
-      }
-
-      const cache_creation = Number(usage.input_token_details?.cache_creation) || 0;
-      const cache_read = Number(usage.input_token_details?.cache_read) || 0;
-
-      const txMetadata = {
+    const result = await recordCollectedUsage(
+      {
+        spendTokens,
+        spendStructuredTokens,
+        pricing: { getMultiplier, getCacheMultiplier },
+        bulkWriteOps: { insertMany: bulkInsertTransactions, updateBalance },
+      },
+      {
+        user: this.user ?? this.options.req.user?.id,
+        conversationId: this.conversationId,
+        collectedUsage,
+        model: model ?? this.model ?? this.options.agent.model_parameters.model,
         context,
+        messageId: this.responseMessageId,
         balance,
         transactions,
-        conversationId: this.conversationId,
-        user: this.user ?? this.options.req.user?.id,
         endpointTokenConfig: this.options.endpointTokenConfig,
-        model: usage.model ?? model ?? this.model ?? this.options.agent.model_parameters.model,
-      };
+      },
+    );
 
-      if (i > 0) {
-        // Count new tokens generated (input_tokens minus previous accumulated tokens)
-        output_tokens +=
-          (Number(usage.input_tokens) || 0) + cache_creation + cache_read - previousTokens;
-      }
-
-      // Add this message's output tokens
-      output_tokens += Number(usage.output_tokens) || 0;
-
-      // Update previousTokens to include this message's output
-      previousTokens += Number(usage.output_tokens) || 0;
-
-      if (cache_creation > 0 || cache_read > 0) {
-        spendStructuredTokens(txMetadata, {
-          promptTokens: {
-            input: usage.input_tokens,
-            write: cache_creation,
-            read: cache_read,
-          },
-          completionTokens: usage.output_tokens,
-        }).catch((err) => {
-          logger.error(
-            '[api/server/controllers/agents/client.js #recordCollectedUsage] Error spending structured tokens',
-            err,
-          );
-        });
-        continue;
-      }
-      spendTokens(txMetadata, {
-        promptTokens: usage.input_tokens,
-        completionTokens: usage.output_tokens,
-      }).catch((err) => {
-        logger.error(
-          '[api/server/controllers/agents/client.js #recordCollectedUsage] Error spending tokens',
-          err,
-        );
-      });
+    if (result) {
+      this.usage = result;
     }
-
-    this.usage = {
-      input_tokens,
-      output_tokens,
-    };
   }
 
   /**
@@ -870,13 +738,13 @@ class AgentClient extends BaseClient {
           },
           user: createSafeUser(this.options.req.user),
         },
-        recursionLimit: agentsEConfig?.recursionLimit ?? 25,
+        recursionLimit: agentsEConfig?.recursionLimit ?? 50,
         signal: abortController.signal,
         streamMode: 'values',
         version: 'v2',
       };
 
-      const toolSet = new Set((this.options.agent.tools ?? []).map((tool) => tool && tool.name));
+      const toolSet = buildToolSet(this.options.agent);
       let { messages: initialMessages, indexTokenCountMap } = formatAgentMessages(
         payload,
         this.indexTokenCountMap,
@@ -888,12 +756,10 @@ class AgentClient extends BaseClient {
        */
       const runAgents = async (messages) => {
         const agents = [this.options.agent];
-        if (
-          this.agentConfigs &&
-          this.agentConfigs.size > 0 &&
-          ((this.options.agent.edges?.length ?? 0) > 0 ||
-            (await checkCapability(this.options.req, AgentCapabilities.chain)))
-        ) {
+        // Include additional agents when:
+        // - agentConfigs has agents (from addedConvo parallel execution or agent handoffs)
+        // - Agents without incoming edges become start nodes and run in parallel automatically
+        if (this.agentConfigs && this.agentConfigs.size > 0) {
           agents.push(...this.agentConfigs.values());
         }
 
@@ -939,6 +805,7 @@ class AgentClient extends BaseClient {
 
         run = await createRun({
           agents,
+          messages,
           indexTokenCountMap,
           runId: this.responseMessageId,
           signal: abortController.signal,
@@ -953,6 +820,12 @@ class AgentClient extends BaseClient {
         }
 
         this.run = run;
+
+        const streamId = this.options.req?._resumableStreamId;
+        if (streamId && run.Graph) {
+          GenerationJobManager.setGraph(streamId, run.Graph);
+        }
+
         if (userMCPAuthMap != null) {
           config.configurable.userMCPAuthMap = userMCPAuthMap;
         }
@@ -968,9 +841,10 @@ class AgentClient extends BaseClient {
         config.signal = null;
       };
 
+      const hideSequentialOutputs = config.configurable.hide_sequential_outputs;
       await runAgents(initialMessages);
       /** @deprecated Agent Chain */
-      if (config.configurable.hide_sequential_outputs) {
+      if (hideSequentialOutputs) {
         this.contentParts = this.contentParts.filter((part, index) => {
           // Include parts that are either:
           // 1. At or after the finalContentStart index
@@ -982,24 +856,6 @@ class AgentClient extends BaseClient {
             part.tool_call_ids
           );
         });
-      }
-
-      try {
-        /** Capture agent ID map if we have edges or multiple agents */
-        const shouldStoreAgentMap =
-          (this.options.agent.edges?.length ?? 0) > 0 || (this.agentConfigs?.size ?? 0) > 0;
-        if (shouldStoreAgentMap && run?.Graph) {
-          const contentPartAgentMap = run.Graph.getContentPartAgentMap();
-          if (contentPartAgentMap && contentPartAgentMap.size > 0) {
-            this.agentIdMap = Object.fromEntries(contentPartAgentMap);
-            logger.debug('[AgentClient] Captured agent ID map:', {
-              totalParts: this.contentParts.length,
-              mappedParts: Object.keys(this.agentIdMap).length,
-            });
-          }
-        }
-      } catch (error) {
-        logger.error('[AgentClient] Error capturing agent ID map:', error);
       }
     } catch (err) {
       logger.error(
@@ -1023,11 +879,20 @@ class AgentClient extends BaseClient {
           this.artifactPromises.push(...attachments);
         }
 
-        await this.recordCollectedUsage({
-          context: 'message',
-          balance: balanceConfig,
-          transactions: transactionsConfig,
-        });
+        /** Skip token spending if aborted - the abort handler (abortMiddleware.js) handles it
+        This prevents double-spending when user aborts via `/api/agents/chat/abort` */
+        const wasAborted = abortController?.signal?.aborted;
+        if (!wasAborted) {
+          await this.recordCollectedUsage({
+            context: 'message',
+            balance: balanceConfig,
+            transactions: transactionsConfig,
+          });
+        } else {
+          logger.debug(
+            '[api/server/controllers/agents/client.js #chatCompletion] Skipping token spending - handled by abort middleware',
+          );
+        }
       } catch (err) {
         logger.error(
           '[api/server/controllers/agents/client.js #chatCompletion] Error in cleanup phase',
@@ -1052,6 +917,14 @@ class AgentClient extends BaseClient {
     }
     const { handleLLMEnd, collected: collectedMetadata } = createMetadataAggregator();
     const { req, agent } = this.options;
+
+    if (req?.body?.isTemporary) {
+      logger.debug(
+        `[api/server/controllers/agents/client.js #titleConvo] Skipping title generation for temporary conversation`,
+      );
+      return;
+    }
+
     const appConfig = req.config;
     let endpoint = agent.endpoint;
 
@@ -1225,6 +1098,7 @@ class AgentClient extends BaseClient {
         model: clientOptions.model,
         balance: balanceConfig,
         transactions: transactionsConfig,
+        messageId: this.responseMessageId,
       }).catch((err) => {
         logger.error(
           '[api/server/controllers/agents/client.js #titleConvo] Error recording collected usage',
@@ -1263,6 +1137,7 @@ class AgentClient extends BaseClient {
           model,
           context,
           balance,
+          messageId: this.responseMessageId,
           conversationId: this.conversationId,
           user: this.user ?? this.options.req.user?.id,
           endpointTokenConfig: this.options.endpointTokenConfig,
@@ -1281,6 +1156,7 @@ class AgentClient extends BaseClient {
             model,
             balance,
             context: 'reasoning',
+            messageId: this.responseMessageId,
             conversationId: this.conversationId,
             user: this.user ?? this.options.req.user?.id,
             endpointTokenConfig: this.options.endpointTokenConfig,
