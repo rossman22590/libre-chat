@@ -4,19 +4,12 @@ const adminUsersController = require('~/server/controllers/admin/users');
 
 const router = express.Router();
 
-router.get('/stats', middleware.requireJwtAuth, middleware.checkAdmin, adminUsersController.getStats);
 router.get('/users', middleware.requireJwtAuth, middleware.checkAdmin, adminUsersController.listUsers);
 router.put(
   '/users/:userId/balance',
   middleware.requireJwtAuth,
   middleware.checkAdmin,
   adminUsersController.setUserBalance,
-);
-router.post(
-  '/users/:userId/balance/add',
-  middleware.requireJwtAuth,
-  middleware.checkAdmin,
-  adminUsersController.addUserBalance,
 );
 router.post(
   '/users/:userId/ban',
@@ -29,24 +22,6 @@ router.delete(
   middleware.requireJwtAuth,
   middleware.checkAdmin,
   adminUsersController.unbanUser,
-);
-router.get(
-  '/users/:userId/conversations',
-  middleware.requireJwtAuth,
-  middleware.checkAdmin,
-  adminUsersController.getUserConversations,
-);
-router.get(
-  '/users/:userId/conversations/:conversationId/messages',
-  middleware.requireJwtAuth,
-  middleware.checkAdmin,
-  adminUsersController.getConversationMessages,
-);
-router.get(
-  '/users/:userId/transactions',
-  middleware.requireJwtAuth,
-  middleware.checkAdmin,
-  adminUsersController.getUserTransactions,
 );
 
 module.exports = router;
