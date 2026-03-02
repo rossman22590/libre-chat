@@ -49,6 +49,18 @@ export const balanceTransactions = (limit?: number) => {
   return `${BASE_URL}/api/balance/transactions${params}`;
 };
 
+const adminRoot = () => `${BASE_URL}/api/admin`;
+export const adminUsers = (params?: { page?: number; pageSize?: number; search?: string }) => {
+  const searchParams = new URLSearchParams();
+  if (params?.page != null) searchParams.set('page', String(params.page));
+  if (params?.pageSize != null) searchParams.set('pageSize', String(params.pageSize));
+  if (params?.search != null) searchParams.set('search', params.search);
+  const q = searchParams.toString();
+  return `${adminRoot()}/users${q ? `?${q}` : ''}`;
+};
+export const adminUserBalance = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/balance`;
+export const adminUserBan = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/ban`;
+
 export const userPlugins = () => `${BASE_URL}/api/user/plugins`;
 
 export const deleteUser = () => `${BASE_URL}/api/user/delete`;

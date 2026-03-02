@@ -698,3 +698,20 @@ export type TBalanceTransactionItem = {
 export type TBalanceTransactionsResponse = {
   transactions: TBalanceTransactionItem[];
 };
+
+export type TAdminUserItem = {
+  _id: string;
+  email?: string;
+  name?: string;
+  username?: string;
+  role?: string;
+  createdAt?: string;
+  tokenCredits: number;
+};
+
+export type TAdminUsersResponse = {
+  users: TAdminUserItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+};

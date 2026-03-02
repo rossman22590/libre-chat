@@ -127,6 +127,32 @@ export function getBalanceTransactions(limit?: number): Promise<t.TBalanceTransa
   return request.get(endpoints.balanceTransactions(limit));
 }
 
+export function getAdminUsers(params?: {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+}): Promise<t.TAdminUsersResponse> {
+  return request.get(endpoints.adminUsers(params));
+}
+
+export function setAdminUserBalance(
+  userId: string,
+  amount: number,
+): Promise<{ tokenCredits: number }> {
+  return request.put(endpoints.adminUserBalance(userId), { amount });
+}
+
+export function banAdminUser(
+  userId: string,
+  durationMinutes: number,
+): Promise<{ banned: boolean; expiresAt: number }> {
+  return request.post(endpoints.adminUserBan(userId), { durationMinutes });
+}
+
+export function unbanAdminUser(userId: string): Promise<{ banned: boolean }> {
+  return request.delete(endpoints.adminUserBan(userId));
+}
+
 export const updateTokenCount = (text: string) => {
   return request.post(endpoints.tokenizer(), { arg: text });
 };
