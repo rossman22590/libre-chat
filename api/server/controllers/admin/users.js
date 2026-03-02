@@ -1,4 +1,4 @@
-const { User, Balance } = require('~/db/models');
+const { User, Balance, Conversation } = require('~/db/models');
 const getLogStores = require('~/cache/getLogStores');
 const { ViolationTypes } = require('librechat-data-provider');
 
@@ -34,12 +34,19 @@ async function listUsers(req, res) {
     ]);
 
     const userObjectIds = users.map((u) => u._id);
-    const balances = await Balance.find({ user: { $in: userObjectIds } })
-      .select('user tokenCredits')
-      .lean();
+    const [balances, conversationCounts] = await Promise.all([
+      Balance.find({ user: { $in: userObjectIds } }).select('user tokenCredits').lean(),
+      Conversation.aggregate([
+        { $match: { user: { $in: userObjectIds } } },
+        { $group: { _id: '$user', count: { $sum: 1 } } },
+      ]),
+    ]);
 
     const balanceByUser = new Map(
       balances.map((b) => [b.user.toString(), b.tokenCredits ?? 0]),
+    );
+    const convoCountByUser = new Map(
+      conversationCounts.map((c) => [c._id.toString(), c.count]),
     );
 
     const items = users.map((u) => ({
@@ -50,6 +57,7 @@ async function listUsers(req, res) {
       role: u.role,
       createdAt: u.createdAt,
       tokenCredits: balanceByUser.get(u._id.toString()) ?? 0,
+      conversationCount: convoCountByUser.get(u._id.toString()) ?? 0,
     }));
 
     res.status(200).json({

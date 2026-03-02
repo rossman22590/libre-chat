@@ -1,13 +1,11 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Button, Input, useToastContext } from '@librechat/client';
-import { X, RefreshCw } from 'lucide-react';
+import { X, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
 import {
   useGetAdminUsers,
   useGetAdminStats,
   useSetAdminUserBalanceMutation,
   useAddAdminUserBalanceMutation,
-  useBanAdminUserMutation,
-  useUnbanAdminUserMutation,
   useGetAdminUserConversations,
   useGetAdminUserConversationMessages,
   useGetAdminUserTransactions,
@@ -33,14 +31,6 @@ const formatDate = (date: Date | string | undefined): string => {
   return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
 };
 
-const getApiErrorMessage = (error: unknown): string => {
-  if (error && typeof error === 'object' && 'response' in error) {
-    const res = (error as { response?: { data?: { error?: string } } }).response;
-    if (typeof res?.data?.error === 'string') return res.data.error;
-  }
-  return '';
-};
-
 const getContextLabel = (context: string | undefined, localize: (key: string) => string): string => {
   if (!context) return '—';
   const key = CONTEXT_KEYS[context];
@@ -57,11 +47,10 @@ const AdminPanel: React.FC = () => {
   const [searchInput, setSearchInput] = useState('');
   const [balanceAmount, setBalanceAmount] = useState<Record<string, string>>({});
   const [addAmount, setAddAmount] = useState<Record<string, string>>({});
-  const [banMinutes, setBanMinutes] = useState<Record<string, string>>({});
   const [selectedUser, setSelectedUser] = useState<TAdminUserItem | null>(null);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [userDetailTab, setUserDetailTab] = useState<UserDetailTab>('conversations');
-  const [pendingBan, setPendingBan] = useState<{ user: TAdminUserItem; minutes: number } | null>(null);
+  const [isUserDetailFullscreen, setIsUserDetailFullscreen] = useState(false);
 
   const { data: stats, refetch: refetchStats } = useGetAdminStats();
   const { data, isLoading, isError, refetch: refetchUsers } = useGetAdminUsers({
@@ -73,8 +62,6 @@ const AdminPanel: React.FC = () => {
 
   const setBalanceMutation = useSetAdminUserBalanceMutation();
   const addBalanceMutation = useAddAdminUserBalanceMutation();
-  const banMutation = useBanAdminUserMutation();
-  const unbanMutation = useUnbanAdminUserMutation();
 
   const handleSearchSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -129,45 +116,6 @@ const AdminPanel: React.FC = () => {
     [addAmount, addBalanceMutation, showToast, localize, selectedUser?._id],
   );
 
-  const handleBanClick = useCallback((user: TAdminUserItem) => {
-    const raw = banMinutes[user._id] ?? '';
-    const minutes = parseInt(raw, 10);
-    if (isNaN(minutes) || minutes <= 0) {
-      showToast({ status: 'error', message: localize('com_ui_error') });
-      return;
-    }
-    setPendingBan({ user, minutes });
-  }, [banMinutes, showToast, localize]);
-
-  const handleConfirmBan = useCallback(() => {
-    if (!pendingBan) return;
-    banMutation.mutate(
-      { userId: pendingBan.user._id, durationMinutes: pendingBan.minutes },
-      {
-        onSuccess: () => {
-          showToast({ status: 'success', message: localize('com_ui_saved') });
-          setBanMinutes((prev) => ({ ...prev, [pendingBan.user._id]: '' }));
-          setPendingBan(null);
-        },
-        onError: (error: unknown) => {
-          const msg = getApiErrorMessage(error) || localize('com_ui_error');
-          showToast({ status: 'error', message: msg });
-          setPendingBan(null);
-        },
-      },
-    );
-  }, [pendingBan, banMutation, showToast, localize]);
-
-  const handleUnban = useCallback(
-    (user: TAdminUserItem) => {
-      unbanMutation.mutate(user._id, {
-        onSuccess: () => showToast({ status: 'success', message: localize('com_ui_saved') }),
-        onError: () => showToast({ status: 'error', message: localize('com_ui_error') }),
-      });
-    },
-    [unbanMutation, showToast, localize],
-  );
-
   const users = data?.users ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -190,6 +138,7 @@ const AdminPanel: React.FC = () => {
     setSelectedUser(null);
     setSelectedConversationId(null);
     setUserDetailTab('conversations');
+    setIsUserDetailFullscreen(false);
   }, []);
 
   useEffect(() => {
@@ -292,6 +241,7 @@ const AdminPanel: React.FC = () => {
                           setSelectedUser(user);
                           setSelectedConversationId(null);
                           setUserDetailTab('conversations');
+                          setIsUserDetailFullscreen(false);
                         }}
                         className="text-left font-medium text-token-text-primary hover:underline"
                         aria-label={localize('com_nav_admin_view_user')}
@@ -353,38 +303,6 @@ const AdminPanel: React.FC = () => {
                             {localize('com_nav_admin_add_credits')}
                           </Button>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <Input
-                            type="number"
-                            min={1}
-                            placeholder="60"
-                            value={banMinutes[user._id] ?? ''}
-                            onChange={(e) =>
-                              setBanMinutes((prev) => ({ ...prev, [user._id]: e.target.value }))
-                            }
-                            className="w-16"
-                            aria-label={localize('com_nav_admin_ban_minutes')}
-                          />
-                          <span className="text-token-text-secondary text-xs">m</span>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleBanClick(user)}
-                            disabled={banMutation.isLoading}
-                          >
-                            {localize('com_nav_admin_ban')}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleUnban(user)}
-                            disabled={unbanMutation.isLoading}
-                          >
-                            {localize('com_nav_admin_unban')}
-                          </Button>
-                        </div>
                       </div>
                     </td>
                   </tr>
@@ -424,32 +342,6 @@ const AdminPanel: React.FC = () => {
         </>
       )}
 
-      {pendingBan && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40"
-          role="dialog"
-          aria-label="Confirm ban"
-          onClick={() => setPendingBan(null)}
-        >
-          <div
-            className="rounded-lg border border-border-subtle bg-background p-4 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <p className="mb-4 text-text-primary">
-              {localize('com_nav_admin_confirm_ban').replace('{{minutes}}', String(pendingBan.minutes))}
-            </p>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setPendingBan(null)}>
-                {localize('com_ui_cancel')}
-              </Button>
-              <Button type="button" variant="destructive" size="sm" onClick={handleConfirmBan}>
-                {localize('com_nav_admin_ban')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {selectedUser && (
         <div
           className="fixed inset-0 z-50 flex justify-end bg-black/30"
@@ -458,7 +350,7 @@ const AdminPanel: React.FC = () => {
           onClick={(e) => e.target === e.currentTarget && handleCloseUserDetail()}
         >
           <div
-            className="flex w-full max-w-3xl flex-col bg-background shadow-xl sm:w-[32rem]"
+            className={`flex w-full flex-col bg-background shadow-xl ${isUserDetailFullscreen ? '' : 'max-w-3xl sm:w-[32rem]'}`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex shrink-0 flex-col gap-2 border-b border-border-subtle px-4 py-3">
@@ -472,14 +364,24 @@ const AdminPanel: React.FC = () => {
                     {localize('com_nav_balance')}: {selectedUser.tokenCredits.toLocaleString()} · {localize('com_nav_admin_role')}: {selectedUser.role ?? '—'}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleCloseUserDetail}
-                  className="rounded p-1 hover:bg-surface-secondary"
-                  aria-label={localize('com_ui_close')}
-                >
-                  <X className="h-5 w-5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsUserDetailFullscreen((prev) => !prev)}
+                    className="rounded p-1 hover:bg-surface-secondary"
+                    aria-label={isUserDetailFullscreen ? localize('com_ui_collapse') : localize('com_ui_expand')}
+                  >
+                    {isUserDetailFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCloseUserDetail}
+                    className="rounded p-1 hover:bg-surface-secondary"
+                    aria-label={localize('com_ui_close')}
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Input
@@ -517,35 +419,6 @@ const AdminPanel: React.FC = () => {
                   disabled={addBalanceMutation.isLoading}
                 >
                   {localize('com_nav_admin_add_credits')}
-                </Button>
-                <Input
-                  type="number"
-                  min={1}
-                  placeholder="min"
-                  value={banMinutes[selectedUser._id] ?? ''}
-                  onChange={(e) =>
-                    setBanMinutes((prev) => ({ ...prev, [selectedUser._id]: e.target.value }))
-                  }
-                  className="w-16"
-                  aria-label={localize('com_nav_admin_ban_minutes')}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleBanClick(selectedUser)}
-                  disabled={banMutation.isLoading}
-                >
-                  {localize('com_nav_admin_ban')}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleUnban(selectedUser)}
-                  disabled={unbanMutation.isLoading}
-                >
-                  {localize('com_nav_admin_unban')}
                 </Button>
               </div>
             </div>
