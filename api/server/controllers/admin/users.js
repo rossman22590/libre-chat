@@ -1,4 +1,5 @@
 const { User, Balance, Message, Transaction, Conversation } = require('~/db/models');
+const { deleteAllUserSessions } = require('~/models');
 const getLogStores = require('~/cache/getLogStores');
 const { logger } = require('@librechat/data-schemas');
 const { ViolationTypes } = require('librechat-data-provider');
@@ -166,6 +167,7 @@ async function banUser(req, res) {
     };
 
     await banLogs.set(banKey, banPayload);
+    await deleteAllUserSessions({ userId: banKey });
     logger.info(`[Admin] Banned user ${banKey} for ${durationMinutes} minutes`);
     res.status(200).json({ banned: true, expiresAt });
   } catch (err) {

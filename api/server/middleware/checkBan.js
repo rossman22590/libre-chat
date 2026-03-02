@@ -60,6 +60,10 @@ const checkBan = async (req, res, next = () => {}) => {
       userId = user?._id ? user._id.toString() : userId;
     }
 
+    if (userId != null) {
+      userId = typeof userId === 'string' ? userId : userId.toString();
+    }
+
     if (!userId && !req.ip) {
       return next();
     }
@@ -114,12 +118,12 @@ const checkBan = async (req, res, next = () => {}) => {
 
     const timeLeft = Number(banEntry.expiresAt) - Date.now();
 
-    if (timeLeft <= 0 && ipKey) {
-      await banLogs.delete(ipKey);
+    if (timeLeft <= 0 && req.ip) {
+      await banLogs.delete(req.ip);
     }
 
-    if (timeLeft <= 0 && userKey) {
-      await banLogs.delete(userKey);
+    if (timeLeft <= 0 && userId) {
+      await banLogs.delete(userId);
       return next();
     }
 
