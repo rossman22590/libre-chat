@@ -31,6 +31,24 @@ export const useGetUserBalance = (
   });
 };
 
+export const useGetBalanceTransactions = (
+  config?: UseQueryOptions<t.TBalanceTransactionsResponse> & { limit?: number },
+): QueryObserverResult<t.TBalanceTransactionsResponse> => {
+  const queriesEnabled = useRecoilValue<boolean>(store.queriesEnabled);
+  const { limit = 50, ...queryConfig } = config ?? {};
+  return useQuery<t.TBalanceTransactionsResponse>(
+    [QueryKeys.balanceTransactions, limit],
+    () => dataService.getBalanceTransactions(limit),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+      refetchOnMount: true,
+      ...queryConfig,
+      enabled: (queryConfig?.enabled ?? true) === true && queriesEnabled,
+    },
+  );
+};
+
 export const useGetSearchEnabledQuery = (
   config?: UseQueryOptions<boolean>,
 ): QueryObserverResult<boolean> => {

@@ -3,6 +3,7 @@ import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
 import { useAuthContext, useLocalize } from '~/hooks';
 import TokenCreditsItem from './TokenCreditsItem';
 import AutoRefillSettings from './AutoRefillSettings';
+import TransactionHistory from './TransactionHistory';
 
 function Balance() {
   const localize = useLocalize();
@@ -55,6 +56,8 @@ function Balance() {
           {localize('com_nav_balance_auto_refill_disabled')}
         </div>
       )}
+
+      <TransactionHistory />
     </div>
   );
 }
