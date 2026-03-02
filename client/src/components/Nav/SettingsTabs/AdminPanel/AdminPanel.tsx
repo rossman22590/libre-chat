@@ -1,5 +1,4 @@
 import React, { useState, useCallback } from 'react';
-import { ShieldEllipsis } from 'lucide-react';
 import { Button, Input, useToastContext } from '@librechat/client';
 import {
   useGetAdminUsers,
@@ -101,12 +100,7 @@ const AdminPanel: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex flex-col gap-4 p-4 text-sm text-text-primary">
-      <div className="flex items-center gap-2">
-        <ShieldEllipsis className="h-5 w-5 shrink-0" aria-hidden="true" />
-        <h2 className="text-base font-medium">{localize('com_nav_admin_panel')}</h2>
-      </div>
-
+    <div className="flex flex-col gap-4 text-sm text-text-primary">
       <form onSubmit={handleSearchSubmit} className="flex gap-2">
         <Input
           type="text"

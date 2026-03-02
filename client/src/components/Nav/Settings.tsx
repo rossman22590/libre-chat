@@ -1,8 +1,7 @@
 import React, { useState, useRef } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { SettingsTabValues } from 'librechat-data-provider';
-import { MessageSquare, Command, DollarSign, ShieldEllipsis } from 'lucide-react';
-import { SystemRoles } from 'librechat-data-provider';
+import { MessageSquare, Command, DollarSign } from 'lucide-react';
 import { Dialog, DialogPanel, DialogTitle, Transition, TransitionChild } from '@headlessui/react';
 import {
   GearIcon,
@@ -22,22 +21,19 @@ import {
   Data,
   Balance,
   Account,
-  AdminPanel,
 } from './SettingsTabs';
 import usePersonalizationAccess from '~/hooks/usePersonalizationAccess';
-import { useAuthContext, useLocalize, TranslationKeys } from '~/hooks';
+import { useLocalize, TranslationKeys } from '~/hooks';
 import { useGetStartupConfig } from '~/data-provider';
 import { cn } from '~/utils';
 
 export default function Settings({ open, onOpenChange }: TDialogProps) {
   const isSmallScreen = useMediaQuery('(max-width: 767px)');
   const { data: startupConfig } = useGetStartupConfig();
-  const { user } = useAuthContext();
   const localize = useLocalize();
   const [activeTab, setActiveTab] = useState(SettingsTabValues.GENERAL);
   const tabRefs = useRef({});
   const { hasAnyPersonalizationFeature, hasMemoryOptOut } = usePersonalizationAccess();
-  const isAdmin = user?.role === SystemRoles.ADMIN;
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     const tabs: SettingsTabValues[] = [
@@ -48,7 +44,6 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
       ...(hasAnyPersonalizationFeature ? [SettingsTabValues.PERSONALIZATION] : []),
       SettingsTabValues.DATA,
       ...(startupConfig?.balance?.enabled ? [SettingsTabValues.BALANCE] : []),
-      ...(isAdmin ? [SettingsTabValues.ADMIN_PANEL] : []),
       SettingsTabValues.ACCOUNT,
     ];
     const currentIndex = tabs.indexOf(activeTab);
@@ -121,15 +116,6 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
           },
         ]
       : ([] as { value: SettingsTabValues; icon: React.JSX.Element; label: TranslationKeys }[])),
-    ...(isAdmin
-      ? [
-          {
-            value: SettingsTabValues.ADMIN_PANEL,
-            icon: <ShieldEllipsis className="icon-sm" aria-hidden="true" />,
-            label: 'com_nav_admin_panel' as TranslationKeys,
-          },
-        ]
-      : []),
     {
       value: SettingsTabValues.ACCOUNT,
       icon: <UserIcon />,
@@ -260,11 +246,6 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
                     {startupConfig?.balance?.enabled && (
                       <Tabs.Content value={SettingsTabValues.BALANCE} tabIndex={-1}>
                         <Balance />
-                      </Tabs.Content>
-                    )}
-                    {isAdmin && (
-                      <Tabs.Content value={SettingsTabValues.ADMIN_PANEL} tabIndex={-1}>
-                        <AdminPanel />
                       </Tabs.Content>
                     )}
                     <Tabs.Content value={SettingsTabValues.ACCOUNT} tabIndex={-1}>
