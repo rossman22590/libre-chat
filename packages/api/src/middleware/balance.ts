@@ -30,10 +30,7 @@ function buildUpdateFields(
     updateFields.tokenCredits = config.startBalance;
   }
 
-  if (
-    config.startBalance != null &&
-    (userRecord?.tokenCredits == null || userRecord.tokenCredits === 0)
-  ) {
+  if (userRecord?.tokenCredits == null && config.startBalance != null) {
     updateFields.tokenCredits = config.startBalance;
   }
 
