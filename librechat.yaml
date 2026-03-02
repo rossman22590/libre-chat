@@ -374,7 +374,7 @@ balance:
   startBalance: 500000
   autoRefillEnabled: true
   refillIntervalValue: 1
-  refillIntervalUnit: 'months'
+  refillIntervalUnit: 'days'
   refillAmount: 500000
 
 speech:
