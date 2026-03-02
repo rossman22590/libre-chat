@@ -34,10 +34,6 @@ function buildUpdateFields(
     updateFields.tokenCredits = config.startBalance;
   }
 
-  if (userRecord && config.startBalance != null && userRecord.tokenCredits !== config.startBalance) {
-    updateFields.tokenCredits = config.startBalance;
-  }
-
   const isAutoRefillConfigValid =
     config.autoRefillEnabled &&
     config.refillIntervalValue != null &&
