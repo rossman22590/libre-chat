@@ -369,6 +369,14 @@ interface:
 registration:
  socialLogins: ["google", "facebook", "github", "discord", "openid"]
 
+balance:
+  enabled: true
+  startBalance: 20000
+  autoRefillEnabled: true
+  refillIntervalValue: 1
+  refillIntervalUnit: 'months'
+  refillAmount: 20000
+
 speech:
   tts:
     openai:
