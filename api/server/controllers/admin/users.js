@@ -1,9 +1,27 @@
-const { User, Balance, Conversation } = require('~/db/models');
+const { User, Balance, Conversation, Message, Transaction } = require('~/db/models');
 const getLogStores = require('~/cache/getLogStores');
 const { ViolationTypes } = require('librechat-data-provider');
+const { getConvosByCursor } = require('~/models/Conversation');
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
+const TRANSACTIONS_DAYS = 40;
+
+async function getStats(req, res) {
+  try {
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const [totalUsers, recentSignups] = await Promise.all([
+      User.countDocuments({}),
+      User.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
+    ]);
+
+    res.status(200).json({ totalUsers, recentSignups });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load stats' });
+  }
+}
 
 async function listUsers(req, res) {
   try {
@@ -131,9 +149,112 @@ async function unbanUser(req, res) {
   }
 }
 
+async function addUserBalance(req, res) {
+  try {
+    const { userId } = req.params;
+    const amount = parseInt(req.body?.amount, 10);
+    if (amount == null || isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Valid positive amount is required' });
+    }
+
+    const balance = await Balance.findOneAndUpdate(
+      { user: userId },
+      { $inc: { tokenCredits: amount } },
+      { upsert: true, new: true },
+    ).lean();
+
+    await Transaction.create({
+      user: userId,
+      tokenType: 'credits',
+      context: 'admin',
+      rawAmount: amount,
+      tokenValue: amount,
+    });
+
+    res.status(200).json({ tokenCredits: balance.tokenCredits });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to add balance' });
+  }
+}
+
+async function getUserConversations(req, res) {
+  try {
+    const { userId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
+    const cursor = req.query.cursor || undefined;
+    const sortBy = req.query.sortBy || 'updatedAt';
+    const sortDirection = req.query.sortDirection || 'desc';
+
+    const result = await getConvosByCursor(userId, {
+      cursor,
+      limit,
+      sortBy,
+      sortDirection,
+    });
+
+    res.status(200).json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load conversations' });
+  }
+}
+
+async function getConversationMessages(req, res) {
+  try {
+    const { userId, conversationId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+
+    const messages = await Message.find({ user: userId, conversationId })
+      .select('messageId conversationId sender text createdAt isCreatedByUser model endpoint')
+      .sort({ createdAt: 1 })
+      .limit(limit)
+      .lean();
+
+    res.status(200).json({ messages, nextCursor: messages.length === limit ? String(limit) : null });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load messages' });
+  }
+}
+
+async function getUserTransactions(req, res) {
+  try {
+    const { userId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const since = new Date();
+    since.setDate(since.getDate() - TRANSACTIONS_DAYS);
+
+    const transactions = await Transaction.find({
+      user: userId,
+      createdAt: { $gte: since },
+    })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select('context tokenType rawAmount tokenValue model createdAt')
+      .lean();
+
+    const mapped = transactions.map((tx) => ({
+      _id: tx._id.toString(),
+      context: tx.context,
+      tokenType: tx.tokenType,
+      rawAmount: tx.rawAmount,
+      tokenValue: tx.tokenValue,
+      model: tx.model,
+      createdAt: tx.createdAt,
+    }));
+
+    res.status(200).json({ transactions: mapped });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load transactions' });
+  }
+}
+
 module.exports = {
+  getStats,
   listUsers,
   setUserBalance,
+  addUserBalance,
   banUser,
   unbanUser,
+  getUserConversations,
+  getConversationMessages,
+  getUserTransactions,
 };
