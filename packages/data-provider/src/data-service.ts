@@ -135,6 +135,8 @@ export function getAdminUsers(params?: {
   page?: number;
   pageSize?: number;
   search?: string;
+  sortBy?: string;
+  sortDirection?: string;
 }): Promise<t.TAdminUsersResponse> {
   return request.get(endpoints.adminUsers(params));
 }

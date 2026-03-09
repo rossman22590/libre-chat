@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Button, Input, useToastContext } from '@librechat/client';
-import { X, Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import { X, Maximize2, Minimize2, RefreshCw, ChevronUp, ChevronDown } from 'lucide-react';
 import {
   useGetAdminUsers,
   useGetAdminStats,
@@ -10,7 +10,7 @@ import {
   useGetAdminUserConversationMessages,
   useGetAdminUserTransactions,
 } from '~/data-provider';
-import { useLocalize } from '~/hooks';
+import { useLocalize, type TranslationKeys } from '~/hooks';
 import type { TAdminUserItem, TBalanceTransactionItem } from 'librechat-data-provider';
 import type { TMessage } from 'librechat-data-provider';
 
@@ -39,12 +39,22 @@ const getContextLabel = (context: string | undefined, localize: (key: string) =>
 
 type UserDetailTab = 'conversations' | 'credits';
 
+type AdminUsersSortField =
+  | 'email'
+  | 'name'
+  | 'role'
+  | 'tokenCredits'
+  | 'conversationCount'
+  | 'createdAt';
+
 const AdminPanel: React.FC = () => {
   const localize = useLocalize();
   const { showToast } = useToastContext();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [sortBy, setSortBy] = useState<AdminUsersSortField>('createdAt');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [balanceAmount, setBalanceAmount] = useState<Record<string, string>>({});
   const [addAmount, setAddAmount] = useState<Record<string, string>>({});
   const [selectedUser, setSelectedUser] = useState<TAdminUserItem | null>(null);
@@ -57,8 +67,26 @@ const AdminPanel: React.FC = () => {
     page,
     pageSize: PAGE_SIZE,
     search: search || undefined,
+    sortBy,
+    sortDirection,
     enabled: true,
   });
+
+  const handleSort = useCallback((field: AdminUsersSortField) => {
+    setPage(1);
+    setSortBy((prev) => {
+      if (prev === field) {
+        setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
+        return prev;
+      }
+      setSortDirection(
+        field === 'tokenCredits' || field === 'conversationCount' || field === 'createdAt'
+          ? 'desc'
+          : 'asc',
+      );
+      return field;
+    });
+  }, []);
 
   const setBalanceMutation = useSetAdminUserBalanceMutation();
   const addBalanceMutation = useAddAdminUserBalanceMutation();
@@ -219,12 +247,102 @@ const AdminPanel: React.FC = () => {
             <table className="w-full text-left text-sm" role="table">
               <thead>
                 <tr className="border-b border-border-subtle bg-surface-secondary">
-                  <th className="p-2 font-medium">{localize('com_nav_admin_user_email')}</th>
-                  <th className="p-2 font-medium">{localize('com_nav_admin_user_name')}</th>
-                  <th className="p-2 font-medium">{localize('com_nav_admin_role')}</th>
-                  <th className="p-2 font-medium">{localize('com_nav_balance')}</th>
-                  <th className="p-2 font-medium">{localize('com_nav_admin_conversations_count')}</th>
-                  <th className="p-2 font-medium">{localize('com_nav_admin_created')}</th>
+                  <th className="p-2 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('email')}
+                      className="flex items-center gap-1 hover:underline"
+                      aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_admin_user_email')}`}
+                    >
+                      {localize('com_nav_admin_user_email')}
+                      {sortBy === 'email' &&
+                        (sortDirection === 'asc' ? (
+                          <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ))}
+                    </button>
+                  </th>
+                  <th className="p-2 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('name')}
+                      className="flex items-center gap-1 hover:underline"
+                      aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_admin_user_name')}`}
+                    >
+                      {localize('com_nav_admin_user_name')}
+                      {sortBy === 'name' &&
+                        (sortDirection === 'asc' ? (
+                          <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ))}
+                    </button>
+                  </th>
+                  <th className="p-2 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('role')}
+                      className="flex items-center gap-1 hover:underline"
+                      aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_admin_role')}`}
+                    >
+                      {localize('com_nav_admin_role')}
+                      {sortBy === 'role' &&
+                        (sortDirection === 'asc' ? (
+                          <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ))}
+                    </button>
+                  </th>
+                  <th className="p-2 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('tokenCredits')}
+                      className="flex items-center gap-1 hover:underline"
+                      aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_balance')}`}
+                    >
+                      {localize('com_nav_balance')}
+                      {sortBy === 'tokenCredits' &&
+                        (sortDirection === 'asc' ? (
+                          <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ))}
+                    </button>
+                  </th>
+                  <th className="p-2 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('conversationCount')}
+                      className="flex items-center gap-1 hover:underline"
+                      aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_admin_conversations_count')}`}
+                    >
+                      {localize('com_nav_admin_conversations_count')}
+                      {sortBy === 'conversationCount' &&
+                        (sortDirection === 'asc' ? (
+                          <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ))}
+                    </button>
+                  </th>
+                  <th className="p-2 font-medium">
+                    <button
+                      type="button"
+                      onClick={() => handleSort('createdAt')}
+                      className="flex items-center gap-1 hover:underline"
+                      aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_admin_created')}`}
+                    >
+                      {localize('com_nav_admin_created')}
+                      {sortBy === 'createdAt' &&
+                        (sortDirection === 'asc' ? (
+                          <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        ))}
+                    </button>
+                  </th>
                   <th className="p-2 font-medium">{localize('com_nav_admin_actions')}</th>
                 </tr>
               </thead>
@@ -505,9 +623,11 @@ const AdminPanel: React.FC = () => {
                             {typeof msg.text === 'string'
                               ? msg.text
                               : Array.isArray(msg.text)
-                                ? msg.text
+                                ? (
+                                    msg.text as unknown as Array<{ type?: string; text?: string }>
+                                  )
                                     .filter((t) => t?.type === 'text')
-                                    .map((t) => (t as { text?: string })?.text)
+                                    .map((t) => t?.text)
                                     .join(' ')
                                 : '—'}
                           </div>

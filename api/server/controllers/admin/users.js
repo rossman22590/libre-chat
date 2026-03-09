@@ -23,6 +23,19 @@ async function getStats(req, res) {
   }
 }
 
+const ALLOWED_SORT_FIELDS = ['email', 'name', 'role', 'createdAt', 'tokenCredits', 'conversationCount'];
+const DEFAULT_SORT_FIELD = 'createdAt';
+const DEFAULT_SORT_DIR = -1;
+const MAX_USERS_FOR_JOIN_SORT = 5000;
+
+function parseSort(req) {
+  const sortBy = ALLOWED_SORT_FIELDS.includes(req.query.sortBy)
+    ? req.query.sortBy
+    : DEFAULT_SORT_FIELD;
+  const dir = req.query.sortDirection === 'asc' ? 1 : -1;
+  return { sortBy, sortDirection: dir };
+}
+
 async function listUsers(req, res) {
   try {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -32,6 +45,7 @@ async function listUsers(req, res) {
     );
     const skip = (page - 1) * pageSize;
     const search = (req.query.search || '').trim().toLowerCase();
+    const { sortBy, sortDirection } = parseSort(req);
 
     const filter = {};
     if (search) {
@@ -42,14 +56,24 @@ async function listUsers(req, res) {
       ];
     }
 
-    const [users, total] = await Promise.all([
-      User.find(filter, 'email name username role createdAt')
+    const sortByJoinedField = sortBy === 'tokenCredits' || sortBy === 'conversationCount';
+
+    const total = await User.countDocuments(filter);
+    let users;
+
+    if (sortByJoinedField) {
+      users = await User.find(filter, 'email name username role createdAt')
         .sort({ createdAt: -1 })
+        .limit(MAX_USERS_FOR_JOIN_SORT)
+        .lean();
+    } else {
+      const sortObj = { [sortBy]: sortDirection };
+      users = await User.find(filter, 'email name username role createdAt')
+        .sort(sortObj)
         .skip(skip)
         .limit(pageSize)
-        .lean(),
-      User.countDocuments(filter),
-    ]);
+        .lean();
+    }
 
     const userObjectIds = users.map((u) => u._id);
     const userStringIds = users.map((u) => u._id.toString());
@@ -68,7 +92,7 @@ async function listUsers(req, res) {
       conversationCounts.map((c) => [c._id.toString(), c.count]),
     );
 
-    const items = users.map((u) => ({
+    let items = users.map((u) => ({
       _id: u._id.toString(),
       email: u.email,
       name: u.name,
@@ -78,6 +102,21 @@ async function listUsers(req, res) {
       tokenCredits: balanceByUser.get(u._id.toString()) ?? 0,
       conversationCount: convoCountByUser.get(u._id.toString()) ?? 0,
     }));
+
+    if (sortByJoinedField) {
+      const mult = sortDirection === 1 ? 1 : -1;
+      items.sort((a, b) => {
+        const aVal = a[sortBy];
+        const bVal = b[sortBy];
+        if (typeof aVal === 'number' && typeof bVal === 'number') {
+          return mult * (aVal - bVal);
+        }
+        const aStr = String(aVal ?? '');
+        const bStr = String(bVal ?? '');
+        return mult * aStr.localeCompare(bStr);
+      });
+      items = items.slice(skip, skip + pageSize);
+    }
 
     res.status(200).json({
       users: items,
