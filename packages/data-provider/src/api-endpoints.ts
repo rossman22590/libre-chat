@@ -60,6 +60,7 @@ export const adminUsers = (params?: { page?: number; pageSize?: number; search?:
   return `${adminRoot()}/users${q ? `?${q}` : ''}`;
 };
 export const adminUserBalance = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/balance`;
+export const adminUsersBalanceSetAll = () => `${adminRoot()}/users/balance/set-all`;
 export const adminUserBalanceAdd = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/balance/add`;
 export const adminUserBan = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/ban`;
 export const adminUserTransactions = (userId: string, params?: { limit?: number }) => {

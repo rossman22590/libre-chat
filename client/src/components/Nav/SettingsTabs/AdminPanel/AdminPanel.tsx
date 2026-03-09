@@ -5,6 +5,7 @@ import {
   useGetAdminUsers,
   useGetAdminStats,
   useSetAdminUserBalanceMutation,
+  useSetAllAdminUsersBalanceMutation,
   useAddAdminUserBalanceMutation,
   useGetAdminUserConversations,
   useGetAdminUserConversationMessages,
@@ -51,6 +52,7 @@ const AdminPanel: React.FC = () => {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [userDetailTab, setUserDetailTab] = useState<UserDetailTab>('conversations');
   const [isUserDetailFullscreen, setIsUserDetailFullscreen] = useState(false);
+  const [grantAllAmount, setGrantAllAmount] = useState('');
 
   const { data: stats, refetch: refetchStats } = useGetAdminStats();
   const { data, isLoading, isError, refetch: refetchUsers } = useGetAdminUsers({
@@ -61,6 +63,7 @@ const AdminPanel: React.FC = () => {
   });
 
   const setBalanceMutation = useSetAdminUserBalanceMutation();
+  const setAllBalanceMutation = useSetAllAdminUsersBalanceMutation();
   const addBalanceMutation = useAddAdminUserBalanceMutation();
 
   const handleSearchSubmit = useCallback((e: React.FormEvent) => {
@@ -154,6 +157,30 @@ const AdminPanel: React.FC = () => {
     refetchUsers();
   }, [refetchStats, refetchUsers]);
 
+  const handleGrantAllBalance = useCallback(() => {
+    const amount = parseInt(grantAllAmount, 10);
+    if (isNaN(amount) || amount < 0) {
+      showToast({ status: 'error', message: localize('com_ui_error') });
+      return;
+    }
+    setAllBalanceMutation.mutate(amount, {
+      onSuccess: (res) => {
+        const data = res as { updatedCount: number; amount: number };
+        showToast({
+          status: 'success',
+          message: localize('com_nav_admin_grant_all_success', {
+            count: data.updatedCount.toLocaleString(),
+            amount: data.amount.toLocaleString(),
+          } as Record<string, unknown>),
+        });
+        setGrantAllAmount('');
+        refetchUsers();
+        refetchStats();
+      },
+      onError: () => showToast({ status: 'error', message: localize('com_ui_error') }),
+    });
+  }, [grantAllAmount, setAllBalanceMutation, showToast, localize, refetchUsers, refetchStats]);
+
   return (
     <div className="flex flex-col gap-6 text-sm text-text-primary">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -181,19 +208,42 @@ const AdminPanel: React.FC = () => {
         </Button>
       </div>
 
-      <form onSubmit={handleSearchSubmit} className="flex gap-2">
-        <Input
-          type="text"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          placeholder={localize('com_ui_search')}
-          className="flex-1"
-          aria-label={localize('com_ui_search')}
-        />
-        <Button type="submit" variant="default" size="sm">
-          {localize('com_ui_search')}
-        </Button>
-      </form>
+      <div className="flex flex-wrap items-center gap-4">
+        <form onSubmit={handleSearchSubmit} className="flex flex-1 gap-2">
+          <Input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder={localize('com_ui_search')}
+            className="flex-1 min-w-0"
+            aria-label={localize('com_ui_search')}
+          />
+          <Button type="submit" variant="default" size="sm">
+            {localize('com_ui_search')}
+          </Button>
+        </form>
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            min={0}
+            value={grantAllAmount}
+            onChange={(e) => setGrantAllAmount(e.target.value)}
+            placeholder={localize('com_nav_admin_grant_all_placeholder')}
+            className="w-28"
+            aria-label={localize('com_nav_admin_grant_all_balance')}
+          />
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            onClick={handleGrantAllBalance}
+            disabled={setAllBalanceMutation.isLoading}
+            aria-label={localize('com_nav_admin_grant_all_balance')}
+          >
+            {localize('com_nav_admin_grant_all_balance')}
+          </Button>
+        </div>
+      </div>
 
       {isLoading && (
         <div className="py-4 text-center text-token-text-secondary" role="status">
@@ -505,9 +555,9 @@ const AdminPanel: React.FC = () => {
                             {typeof msg.text === 'string'
                               ? msg.text
                               : Array.isArray(msg.text)
-                                ? msg.text
+                                ? (msg.text as Array<{ type?: string; text?: string }>)
                                     .filter((t) => t?.type === 'text')
-                                    .map((t) => (t as { text?: string })?.text)
+                                    .map((t) => t?.text)
                                     .join(' ')
                                 : '—'}
                           </div>

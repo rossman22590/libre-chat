@@ -153,6 +153,12 @@ export function addAdminUserBalance(
   return request.post(endpoints.adminUserBalanceAdd(userId), { amount });
 }
 
+export function setAllAdminUsersBalance(
+  amount: number,
+): Promise<{ updatedCount: number; amount: number }> {
+  return request.post(endpoints.adminUsersBalanceSetAll(), { amount });
+}
+
 export function banAdminUser(
   userId: string,
   durationMinutes: number,
