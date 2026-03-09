@@ -155,7 +155,7 @@ const AdminPanel: React.FC = () => {
   }, [refetchStats, refetchUsers]);
 
   return (
-    <div className="flex min-h-0 flex-col gap-6 text-sm text-text-primary">
+    <div className="flex flex-col gap-6 text-sm text-text-primary">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {stats && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-label={localize('com_nav_admin_dashboard')}>
@@ -344,13 +344,13 @@ const AdminPanel: React.FC = () => {
 
       {selectedUser && (
         <div
-          className="fixed inset-0 z-[200] flex justify-end bg-black/30"
+          className="fixed inset-0 z-50 flex justify-end bg-black/30"
           role="dialog"
           aria-label={localize('com_nav_admin_user_detail')}
           onClick={(e) => e.target === e.currentTarget && handleCloseUserDetail()}
         >
           <div
-            className={`flex h-full w-full flex-col bg-background shadow-xl ${isUserDetailFullscreen ? 'max-w-none' : 'max-w-3xl sm:w-[32rem]'}`}
+            className={`flex w-full flex-col bg-background shadow-xl ${isUserDetailFullscreen ? '' : 'max-w-3xl sm:w-[32rem]'}`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex shrink-0 flex-col gap-2 border-b border-border-subtle px-4 py-3">

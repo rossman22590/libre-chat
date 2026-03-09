@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet } from 'react-router-dom';
 import { useMediaQuery } from '@librechat/client';
 import type { ContextType } from '~/common';
 import {
@@ -32,8 +32,6 @@ export default function Root() {
 
   const { isAuthenticated, logout } = useAuthContext();
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
-  const location = useLocation();
-  const isAdminRoute = location.pathname === '/admin' || location.pathname.endsWith('/admin');
 
   // Global health check - runs once per authenticated session
   useHealthCheck(isAuthenticated);
@@ -77,13 +75,11 @@ export default function Root() {
               <Banner onHeightChange={setBannerHeight} />
               <div className="flex" style={{ height: `calc(100dvh - ${bannerHeight}px)` }}>
                 <div className="relative z-0 flex h-full w-full overflow-hidden">
-                  {!isAdminRoute && (
-                    <Nav navVisible={navVisible} setNavVisible={setNavVisible} />
-                  )}
+                  <Nav navVisible={navVisible} setNavVisible={setNavVisible} />
                   <div
-                    className="relative flex h-full min-h-0 max-w-full flex-1 flex-col overflow-hidden"
+                    className="relative flex h-full max-w-full flex-1 flex-col overflow-hidden"
                     style={
-                      !isAdminRoute && isSmallScreen
+                      isSmallScreen
                         ? {
                             transform: navVisible
                               ? `translateX(${NAV_WIDTH.MOBILE}px)`
@@ -93,9 +89,7 @@ export default function Root() {
                         : undefined
                     }
                   >
-                    {!isAdminRoute && (
-                      <MobileNav navVisible={navVisible} setNavVisible={setNavVisible} />
-                    )}
+                    <MobileNav navVisible={navVisible} setNavVisible={setNavVisible} />
                     <Outlet context={{ navVisible, setNavVisible } satisfies ContextType} />
                   </div>
                 </div>
