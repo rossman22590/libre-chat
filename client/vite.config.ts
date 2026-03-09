@@ -310,6 +310,8 @@ export default defineConfig(({ command }) => ({
       '~': path.join(__dirname, 'src/'),
       $fonts: path.resolve(__dirname, 'public/fonts'),
       'micromark-extension-math': 'micromark-extension-llm-math',
+      '@monaco-editor/react': path.resolve(__dirname, '../node_modules/@monaco-editor/react'),
+      'monaco-editor': path.resolve(__dirname, '../node_modules/monaco-editor'),
     },
   },
 }));

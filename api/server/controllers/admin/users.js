@@ -52,10 +52,11 @@ async function listUsers(req, res) {
     ]);
 
     const userObjectIds = users.map((u) => u._id);
+    const userStringIds = users.map((u) => u._id.toString());
     const [balances, conversationCounts] = await Promise.all([
       Balance.find({ user: { $in: userObjectIds } }).select('user tokenCredits').lean(),
       Conversation.aggregate([
-        { $match: { user: { $in: userObjectIds } } },
+        { $match: { user: { $in: userStringIds } } },
         { $group: { _id: '$user', count: { $sum: 1 } } },
       ]),
     ]);
