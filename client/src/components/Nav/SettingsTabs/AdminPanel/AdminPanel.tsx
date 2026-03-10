@@ -12,6 +12,7 @@ import {
   useGetAdminUserTransactions,
 } from '~/data-provider';
 import { useLocalize, type TranslationKeys } from '~/hooks';
+import { getAllContentText } from '~/utils/messages';
 import type { TAdminUserItem, TBalanceTransactionItem } from 'librechat-data-provider';
 import type { TMessage } from 'librechat-data-provider';
 
@@ -732,14 +733,7 @@ const AdminPanel: React.FC = () => {
                             {msg.model && <span>{msg.model}</span>}
                           </div>
                           <div className="mt-1 break-words text-text-primary">
-                            {typeof msg.text === 'string'
-                              ? msg.text
-                              : Array.isArray(msg.text)
-                                ? (msg.text as Array<{ type?: string; text?: string }>)
-                                    .filter((t) => t?.type === 'text')
-                                    .map((t) => t?.text)
-                                    .join(' ')
-                                : '—'}
+                            {getAllContentText(msg) || '—'}
                           </div>
                         </div>
                       ))}

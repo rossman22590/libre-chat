@@ -289,7 +289,7 @@ async function getConversationMessages(req, res) {
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
 
     const messages = await Message.find({ user: userId, conversationId })
-      .select('messageId conversationId sender text createdAt isCreatedByUser model endpoint')
+      .select('messageId conversationId sender text content createdAt isCreatedByUser model endpoint')
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean();
