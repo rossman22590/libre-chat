@@ -341,18 +341,18 @@ const AdminPanel: React.FC = () => {
 
       {!isLoading && !isError && users.length > 0 && (
         <>
-          <div className="overflow-x-auto rounded-md border border-border-subtle">
-            <table className="w-full text-left text-sm" role="table">
+          <div className="min-w-0 rounded-md border border-border-subtle">
+            <table className="w-full table-fixed text-left text-sm" role="table">
               <thead>
                 <tr className="border-b border-border-subtle bg-surface-secondary">
-                  <th className="p-2 font-medium">
+                  <th className="w-[12%] min-w-0 p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('email')}
-                      className="flex items-center gap-1 hover:underline"
+                      className="flex min-w-0 items-center gap-1 truncate hover:underline"
                       aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_admin_user_email')}`}
                     >
-                      {localize('com_nav_admin_user_email')}
+                      <span className="truncate">{localize('com_nav_admin_user_email')}</span>
                       {sortBy === 'email' &&
                         (sortDirection === 'asc' ? (
                           <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -361,14 +361,14 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="p-2 font-medium">
+                  <th className="w-[10%] min-w-0 p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('name')}
-                      className="flex items-center gap-1 hover:underline"
+                      className="flex min-w-0 items-center gap-1 truncate hover:underline"
                       aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_admin_user_name')}`}
                     >
-                      {localize('com_nav_admin_user_name')}
+                      <span className="truncate">{localize('com_nav_admin_user_name')}</span>
                       {sortBy === 'name' &&
                         (sortDirection === 'asc' ? (
                           <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -377,7 +377,7 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="p-2 font-medium">
+                  <th className="w-[6%] min-w-0 p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('role')}
@@ -393,14 +393,14 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="p-2 font-medium">
+                  <th className="w-[12%] min-w-0 p-1.5 font-medium" title={localize('com_nav_admin_true_cost')}>
                     <button
                       type="button"
                       onClick={() => handleSort('tokenCredits')}
                       className="flex items-center gap-1 hover:underline"
                       aria-label={`${localize('com_nav_admin_sort_by' as TranslationKeys)} ${localize('com_nav_balance')}`}
                     >
-                      {localize('com_nav_balance')}
+                      {localize('com_nav_admin_balance_usd')}
                       {sortBy === 'tokenCredits' &&
                         (sortDirection === 'asc' ? (
                           <ChevronUp className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -409,13 +409,10 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="p-2 font-medium" title={localize('com_nav_admin_true_cost')}>
-                    {localize('com_nav_admin_true_cost')}
+                  <th className="w-[8%] min-w-0 whitespace-nowrap p-1.5 font-medium" title={localize('com_nav_admin_real_cost')}>
+                    {localize('com_nav_admin_spent_mo')}
                   </th>
-                  <th className="p-2 font-medium" title={localize('com_nav_admin_real_cost')}>
-                    {localize('com_nav_admin_real_cost')}
-                  </th>
-                  <th className="p-2 font-medium">
+                  <th className="w-[5%] min-w-0 p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('conversationCount')}
@@ -431,7 +428,7 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="p-2 font-medium">
+                  <th className="w-[8%] min-w-0 p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('createdAt')}
@@ -447,8 +444,8 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="p-2 font-medium">{localize('com_nav_admin_last_refill')}</th>
-                  <th className="p-2 font-medium">{localize('com_nav_admin_actions')}</th>
+                  <th className="w-[8%] min-w-0 p-1.5 font-medium">{localize('com_nav_admin_last_refill')}</th>
+                  <th className="w-[31%] min-w-0 p-1.5 font-medium">{localize('com_nav_admin_actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -457,7 +454,7 @@ const AdminPanel: React.FC = () => {
                     key={user._id}
                     className="border-b border-border-subtle last:border-b-0 hover:bg-surface-secondary/50"
                   >
-                    <td className="p-2">
+                    <td className="min-w-0 p-1.5">
                       <button
                         type="button"
                         onClick={() => {
@@ -466,25 +463,28 @@ const AdminPanel: React.FC = () => {
                           setUserDetailTab('conversations');
                           setIsUserDetailFullscreen(false);
                         }}
-                        className="text-left font-medium text-token-text-primary hover:underline"
+                        className="block min-w-0 truncate text-left font-medium text-token-text-primary hover:underline"
+                        title={user.email ?? undefined}
                         aria-label={localize('com_nav_admin_view_user')}
                       >
                         {user.email ?? '—'}
                       </button>
                     </td>
-                    <td className="p-2">{user.name ?? user.username ?? '—'}</td>
-                    <td className="p-2">{user.role ?? '—'}</td>
-                    <td className="p-2 font-medium">{user.tokenCredits.toLocaleString()}</td>
-                    <td className="p-2 font-medium text-token-text-secondary" aria-label={formatTrueCost(user.tokenCredits)}>
-                      {formatTrueCost(user.tokenCredits)}
+                    <td className="min-w-0 p-1.5 truncate text-token-text-primary" title={user.name ?? user.username ?? undefined}>
+                      {user.name ?? user.username ?? '—'}
                     </td>
-                    <td className="p-2 font-medium text-token-text-secondary" aria-label={formatTrueCost(user.totalSpentTokenCredits ?? 0)}>
-                      {formatTrueCost(user.totalSpentTokenCredits ?? 0)}
+                    <td className="min-w-0 truncate p-1.5">{user.role ?? '—'}</td>
+                    <td className="whitespace-nowrap p-1.5 font-medium text-token-text-primary" title={`${user.tokenCredits.toLocaleString()} ${formatTrueCost(user.tokenCredits)}`}>
+                      <span className="truncate">{user.tokenCredits.toLocaleString()}</span>
+                      <span className="ml-0.5 shrink-0 text-token-text-secondary">({formatTrueCost(user.tokenCredits)})</span>
                     </td>
-                    <td className="p-2">{user.conversationCount ?? 0}</td>
-                    <td className="p-2 text-token-text-secondary">{formatDate(user.createdAt)}</td>
-                    <td className="p-2 text-token-text-secondary">{formatDate(user.lastRefill ?? undefined)}</td>
-                    <td className="p-2">
+                    <td className="whitespace-nowrap p-1.5 font-medium text-token-text-secondary" aria-label={formatTrueCost((user as TAdminUserItem & { totalSpentTokenCredits?: number }).totalSpentTokenCredits ?? 0)}>
+                      {formatTrueCost((user as TAdminUserItem & { totalSpentTokenCredits?: number }).totalSpentTokenCredits ?? 0)}
+                    </td>
+                    <td className="p-1.5">{user.conversationCount ?? 0}</td>
+                    <td className="whitespace-nowrap p-1.5 text-token-text-secondary">{formatDate(user.createdAt)}</td>
+                    <td className="whitespace-nowrap p-1.5 text-token-text-secondary">{formatDate(user.lastRefill ?? undefined)}</td>
+                    <td className="min-w-0 p-1.5">
                       {user.isBanned && (
                         <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
                           {localize('com_nav_admin_banned_badge')}

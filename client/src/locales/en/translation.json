@@ -484,6 +484,8 @@
   "com_nav_admin_next_refill": "Next refill",
   "com_nav_admin_true_cost": "True cost",
   "com_nav_admin_real_cost": "Real cost (this month)",
+  "com_nav_admin_balance_usd": "Balance ($)",
+  "com_nav_admin_spent_mo": "Spent (mo)",
   "com_nav_browser": "Browser",
   "com_nav_center_chat_input": "Center Chat Input on Welcome Screen",
   "com_nav_change_picture": "Change picture",
