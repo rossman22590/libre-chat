@@ -9,6 +9,13 @@ function isInvalidDate(date) {
   return isNaN(date);
 }
 
+function isRefillIntervalElapsed(record) {
+  const lastRefillDate = new Date(record.lastRefill);
+  if (isInvalidDate(lastRefillDate)) return true;
+  const now = new Date();
+  return now >= addIntervalToDate(lastRefillDate, record.refillIntervalValue, record.refillIntervalUnit);
+}
+
 /**
  * Simple check method that calculates token cost and returns balance info.
  * The auto-refill logic has been moved to balanceMethods.js to prevent circular dependencies.
@@ -49,18 +56,11 @@ const checkBalanceRecord = async function ({
     endpointTokenConfig: !!endpointTokenConfig,
   });
 
-  // Reset to refillAmount every interval when resetToAmountOnInterval is enabled (e.g. "put back to 600k every 6 hours")
   if (
     record.resetToAmountOnInterval &&
     record.autoRefillEnabled &&
     record.refillAmount > 0 &&
-    (isInvalidDate(new Date(record.lastRefill)) ||
-      new Date() >=
-        addIntervalToDate(
-          new Date(record.lastRefill),
-          record.refillIntervalValue,
-          record.refillIntervalUnit,
-        ))
+    isRefillIntervalElapsed(record)
   ) {
     try {
       const result = await createBalanceResetTransaction({
@@ -73,27 +73,18 @@ const checkBalanceRecord = async function ({
       logger.error('[Balance.check] Failed to reset balance to amount', error);
     }
   }
-  // Only perform auto-refill if spending would bring the balance to 0 or below (and reset-to-amount did not run)
-  else if (balance - tokenCost <= 0 && record.autoRefillEnabled && record.refillAmount > 0) {
-    const lastRefillDate = new Date(record.lastRefill);
-    const now = new Date();
-    if (
-      isInvalidDate(lastRefillDate) ||
-      now >=
-        addIntervalToDate(lastRefillDate, record.refillIntervalValue, record.refillIntervalUnit)
-    ) {
-      try {
-        /** @type {{ rate: number, user: string, balance: number, transaction: import('@librechat/data-schemas').ITransaction}} */
-        const result = await createAutoRefillTransaction({
-          user: user,
-          tokenType: 'credits',
-          context: 'autoRefill',
-          rawAmount: record.refillAmount,
-        });
-        balance = result.balance;
-      } catch (error) {
-        logger.error('[Balance.check] Failed to record transaction for auto-refill', error);
-      }
+  else if (balance - tokenCost <= 0 && record.autoRefillEnabled && record.refillAmount > 0 && isRefillIntervalElapsed(record)) {
+    try {
+      /** @type {{ rate: number, user: string, balance: number, transaction: import('@librechat/data-schemas').ITransaction}} */
+      const result = await createAutoRefillTransaction({
+        user: user,
+        tokenType: 'credits',
+        context: 'autoRefill',
+        rawAmount: record.refillAmount,
+      });
+      balance = result.balance;
+    } catch (error) {
+      logger.error('[Balance.check] Failed to record transaction for auto-refill', error);
     }
   }
 
