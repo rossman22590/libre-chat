@@ -2,6 +2,19 @@ const { matchModelName, findMatchingPattern } = require('@librechat/api');
 const defaultRate = 6;
 
 /**
+ * Token pricing source of truth.
+ *
+ * All token cost calculations flow from here:
+ * - Balance checks (balanceMethods.js) use getMultiplier() to compute tokenCost = amount * multiplier.
+ * - Transaction recording (Transaction.js) uses getMultiplier() so tokenValue = rawAmount * multiplier;
+ *   that tokenValue is stored and used to deduct from the user's balance.
+ * - Admin "Spent (mo)" and real cost display sum Transaction.tokenValue (already computed with these
+ *   rates) for the current month and convert to USD (1e6 credits = $1).
+ *
+ * Rates in tokenValues / bedrockValues are credits-per-token for each model and token type (prompt/completion).
+ */
+
+/**
  * Token Pricing Configuration
  *
  * Pattern Matching
@@ -411,8 +424,8 @@ const getValueKey = (model, endpoint) => {
 };
 
 /**
- * Retrieves the multiplier for a given value key and token type. If no value key is provided,
- * it attempts to derive it from the model name.
+ * Returns the credits-per-token rate for a model and token type. Used by Transaction.calculateTokenValue
+ * and balanceMethods.checkBalanceRecord to compute tokenValue / tokenCost. All cost calculations use this.
  *
  * @param {Object} params - The parameters for the function.
  * @param {string} [params.valueKey] - The key corresponding to the model name.
