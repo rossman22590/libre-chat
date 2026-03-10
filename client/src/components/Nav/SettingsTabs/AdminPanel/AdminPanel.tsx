@@ -73,6 +73,19 @@ const getContextLabel = (context: string | undefined, localize: (key: string) =>
   return key ? localize(key) : context;
 };
 
+/** 1000 tokenCredits = $0.001 USD */
+const TOKEN_CREDITS_PER_USD = 1_000_000;
+
+const formatTrueCost = (tokenCredits: number): string => {
+  const usd = tokenCredits / TOKEN_CREDITS_PER_USD;
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(usd);
+};
+
 type UserDetailTab = 'conversations' | 'credits';
 
 type AdminUsersSortField =
@@ -396,6 +409,12 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
+                  <th className="p-2 font-medium" title={localize('com_nav_admin_true_cost')}>
+                    {localize('com_nav_admin_true_cost')}
+                  </th>
+                  <th className="p-2 font-medium" title={localize('com_nav_admin_real_cost')}>
+                    {localize('com_nav_admin_real_cost')}
+                  </th>
                   <th className="p-2 font-medium">
                     <button
                       type="button"
@@ -456,6 +475,12 @@ const AdminPanel: React.FC = () => {
                     <td className="p-2">{user.name ?? user.username ?? '—'}</td>
                     <td className="p-2">{user.role ?? '—'}</td>
                     <td className="p-2 font-medium">{user.tokenCredits.toLocaleString()}</td>
+                    <td className="p-2 font-medium text-token-text-secondary" aria-label={formatTrueCost(user.tokenCredits)}>
+                      {formatTrueCost(user.tokenCredits)}
+                    </td>
+                    <td className="p-2 font-medium text-token-text-secondary" aria-label={formatTrueCost(user.totalSpentTokenCredits ?? 0)}>
+                      {formatTrueCost(user.totalSpentTokenCredits ?? 0)}
+                    </td>
                     <td className="p-2">{user.conversationCount ?? 0}</td>
                     <td className="p-2 text-token-text-secondary">{formatDate(user.createdAt)}</td>
                     <td className="p-2 text-token-text-secondary">{formatDate(user.lastRefill ?? undefined)}</td>

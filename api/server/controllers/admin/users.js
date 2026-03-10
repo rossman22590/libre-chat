@@ -77,7 +77,10 @@ async function listUsers(req, res) {
 
     const userObjectIds = users.map((u) => u._id);
     const userStringIds = users.map((u) => u._id.toString());
-    const [balances, conversationCounts] = await Promise.all([
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    const [balances, conversationCounts, spentAggregation] = await Promise.all([
       Balance.find({ user: { $in: userObjectIds } })
         .select('user tokenCredits lastRefill refillIntervalValue refillIntervalUnit')
         .lean(),
@@ -85,8 +88,21 @@ async function listUsers(req, res) {
         { $match: { user: { $in: userStringIds } } },
         { $group: { _id: '$user', count: { $sum: 1 } } },
       ]),
+      Transaction.aggregate([
+        {
+          $match: {
+            user: { $in: userObjectIds },
+            tokenValue: { $lt: 0 },
+            createdAt: { $gte: startOfMonth, $lte: endOfMonth },
+          },
+        },
+        { $group: { _id: '$user', totalSpentCredits: { $sum: { $abs: '$tokenValue' } } } },
+      ]),
     ]);
 
+    const totalSpentByUser = new Map(
+      spentAggregation.map((row) => [row._id.toString(), row.totalSpentCredits ?? 0]),
+    );
     const balanceByUser = new Map(
       balances.map((b) => [b.user.toString(), b.tokenCredits ?? 0]),
     );
@@ -117,6 +133,7 @@ async function listUsers(req, res) {
         role: u.role,
         createdAt: u.createdAt,
         tokenCredits: balanceByUser.get(id) ?? 0,
+        totalSpentTokenCredits: totalSpentByUser.get(id) ?? 0,
         conversationCount: convoCountByUser.get(id) ?? 0,
         lastRefill: lastRefillByUser.get(id) ?? null,
         refillIntervalValue: interval?.value,

@@ -707,6 +707,8 @@ export type TAdminUserItem = {
   role?: string;
   createdAt?: string;
   tokenCredits: number;
+  /** Total token credits spent in the current month; used for "real cost" in USD. */
+  totalSpentTokenCredits?: number;
   conversationCount?: number;
   isBanned?: boolean;
   lastRefill?: string | null;
