@@ -153,6 +153,30 @@ async function setUserBalance(req, res) {
   }
 }
 
+async function setAllUsersBalance(req, res) {
+  try {
+    const amount = parseInt(req.body?.amount, 10);
+    if (amount == null || isNaN(amount) || amount < 0) {
+      return res.status(400).json({ error: 'Valid amount is required' });
+    }
+
+    const users = await User.find({}).select('_id').lean();
+    let updatedCount = 0;
+    for (const user of users) {
+      await Balance.findOneAndUpdate(
+        { user: user._id },
+        { $set: { tokenCredits: amount } },
+        { upsert: true, new: true },
+      ).lean();
+      updatedCount++;
+    }
+
+    res.status(200).json({ updatedCount, amount });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to set balance for all users' });
+  }
+}
+
 async function banUser(req, res) {
   try {
     const { userId } = req.params;
@@ -291,6 +315,7 @@ module.exports = {
   getStats,
   listUsers,
   setUserBalance,
+  setAllUsersBalance,
   addUserBalance,
   banUser,
   unbanUser,
