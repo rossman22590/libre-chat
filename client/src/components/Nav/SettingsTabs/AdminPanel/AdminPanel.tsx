@@ -258,7 +258,7 @@ const AdminPanel: React.FC = () => {
   }, [grantAllAmount, setAllBalanceMutation, showToast, localize, refetchUsers, refetchStats]);
 
   return (
-    <div className="flex flex-col gap-6 text-sm text-text-primary">
+    <div className="flex min-w-0 flex-col gap-6 overflow-hidden text-sm text-text-primary">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {stats && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-label={localize('com_nav_admin_dashboard')}>
@@ -341,11 +341,11 @@ const AdminPanel: React.FC = () => {
 
       {!isLoading && !isError && users.length > 0 && (
         <>
-          <div className="min-w-0 rounded-md border border-border-subtle">
-            <table className="w-full table-fixed text-left text-sm" role="table">
+          <div className="min-w-0 overflow-hidden rounded-md border border-border-subtle">
+            <table className="w-full table-fixed border-collapse text-left text-sm" role="table">
               <thead>
                 <tr className="border-b border-border-subtle bg-surface-secondary">
-                  <th className="w-[12%] min-w-0 p-1.5 font-medium">
+                  <th className="w-[12%] min-w-0 overflow-hidden p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('email')}
@@ -361,7 +361,7 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="w-[10%] min-w-0 p-1.5 font-medium">
+                  <th className="w-[10%] min-w-0 overflow-hidden p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('name')}
@@ -377,7 +377,7 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="w-[6%] min-w-0 p-1.5 font-medium">
+                  <th className="w-[6%] min-w-0 overflow-hidden p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('role')}
@@ -393,7 +393,7 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="w-[12%] min-w-0 p-1.5 font-medium" title={localize('com_nav_admin_true_cost')}>
+                  <th className="w-[12%] min-w-0 overflow-hidden p-1.5 font-medium" title={localize('com_nav_admin_true_cost')}>
                     <button
                       type="button"
                       onClick={() => handleSort('tokenCredits')}
@@ -409,10 +409,10 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="w-[8%] min-w-0 whitespace-nowrap p-1.5 font-medium" title={localize('com_nav_admin_real_cost')}>
+                  <th className="w-[8%] min-w-0 overflow-hidden whitespace-nowrap p-1.5 font-medium" title={localize('com_nav_admin_real_cost')}>
                     {localize('com_nav_admin_spent_mo')}
                   </th>
-                  <th className="w-[5%] min-w-0 p-1.5 font-medium">
+                  <th className="w-[5%] min-w-0 overflow-hidden p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('conversationCount')}
@@ -428,7 +428,7 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="w-[8%] min-w-0 p-1.5 font-medium">
+                  <th className="w-[8%] min-w-0 overflow-hidden p-1.5 font-medium">
                     <button
                       type="button"
                       onClick={() => handleSort('createdAt')}
@@ -444,8 +444,8 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
-                  <th className="w-[8%] min-w-0 p-1.5 font-medium">{localize('com_nav_admin_last_refill')}</th>
-                  <th className="w-[31%] min-w-0 p-1.5 font-medium">{localize('com_nav_admin_actions')}</th>
+                  <th className="w-[8%] min-w-0 overflow-hidden p-1.5 font-medium">{localize('com_nav_admin_last_refill')}</th>
+                  <th className="w-[31%] min-w-0 overflow-hidden p-1.5 font-medium">{localize('com_nav_admin_actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -482,20 +482,24 @@ const AdminPanel: React.FC = () => {
                       <span className="inline-block min-w-0 max-w-full truncate">{user.tokenCredits.toLocaleString()}</span>
                       <span className="ml-0.5 shrink-0 text-token-text-secondary">({formatTrueCost(user.tokenCredits)})</span>
                     </td>
-                    <td className="whitespace-nowrap p-1.5 font-medium text-token-text-secondary" aria-label={formatTrueCost((user as TAdminUserItem & { totalSpentTokenCredits?: number }).totalSpentTokenCredits ?? 0)}>
+                    <td className="overflow-hidden whitespace-nowrap p-1.5 font-medium text-token-text-secondary" aria-label={formatTrueCost((user as TAdminUserItem & { totalSpentTokenCredits?: number }).totalSpentTokenCredits ?? 0)}>
                       {formatTrueCost((user as TAdminUserItem & { totalSpentTokenCredits?: number }).totalSpentTokenCredits ?? 0)}
                     </td>
-                    <td className="p-1.5">{user.conversationCount ?? 0}</td>
-                    <td className="whitespace-nowrap p-1.5 text-token-text-secondary">{formatDate(user.createdAt)}</td>
-                    <td className="whitespace-nowrap p-1.5 text-token-text-secondary">{formatDate(user.lastRefill ?? undefined)}</td>
-                    <td className="min-w-0 p-1.5">
+                    <td className="overflow-hidden p-1.5">{user.conversationCount ?? 0}</td>
+                    <td className="overflow-hidden whitespace-nowrap p-1.5 text-token-text-secondary" title={formatDate(user.createdAt)}>
+                      <span className="block truncate">{formatDate(user.createdAt)}</span>
+                    </td>
+                    <td className="overflow-hidden whitespace-nowrap p-1.5 text-token-text-secondary" title={formatDate(user.lastRefill ?? undefined)}>
+                      <span className="block truncate">{formatDate(user.lastRefill ?? undefined)}</span>
+                    </td>
+                    <td className="min-w-0 overflow-hidden p-1.5">
                       {user.isBanned && (
                         <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
                           {localize('com_nav_admin_banned_badge')}
                         </span>
                       )}
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        <div className="flex items-center gap-1">
+                      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1 sm:gap-2">
+                        <div className="flex min-w-0 shrink-0 items-center gap-1">
                           <Input
                             type="number"
                             min={0}
@@ -504,7 +508,7 @@ const AdminPanel: React.FC = () => {
                             onChange={(e) =>
                               setBalanceAmount((prev) => ({ ...prev, [user._id]: e.target.value }))
                             }
-                            className="w-20"
+                            className="w-14 sm:w-20"
                             aria-label={localize('com_nav_admin_set_balance')}
                           />
                           <Button
@@ -513,18 +517,19 @@ const AdminPanel: React.FC = () => {
                             size="sm"
                             onClick={() => handleSetBalance(user)}
                             disabled={setBalanceMutation.isLoading}
+                            className="shrink-0 text-xs sm:text-sm"
                           >
                             {localize('com_nav_admin_set_balance')}
                           </Button>
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex min-w-0 shrink-0 items-center gap-1">
                           <Input
                             type="number"
                             min={1}
                             placeholder="+"
                             value={addAmount[user._id] ?? ''}
                             onChange={(e) => setAddAmount((prev) => ({ ...prev, [user._id]: e.target.value }))}
-                            className="w-20"
+                            className="w-14 sm:w-20"
                             aria-label={localize('com_nav_admin_add_credits')}
                           />
                           <Button
@@ -533,6 +538,7 @@ const AdminPanel: React.FC = () => {
                             size="sm"
                             onClick={() => handleAddBalance(user)}
                             disabled={addBalanceMutation.isLoading}
+                            className="shrink-0 text-xs sm:text-sm"
                           >
                             {localize('com_nav_admin_add_credits')}
                           </Button>
