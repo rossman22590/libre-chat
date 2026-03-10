@@ -14,6 +14,15 @@ export const useSetAdminUserBalanceMutation = () => {
   );
 };
 
+export const useSetAllAdminUsersBalanceMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation((amount: number) => dataService.setAllAdminUsersBalance(amount), {
+    onSuccess: () => {
+      queryClient.invalidateQueries([QueryKeys.adminUsers]);
+    },
+  });
+};
+
 export const useAddAdminUserBalanceMutation = () => {
   const queryClient = useQueryClient();
   return useMutation(

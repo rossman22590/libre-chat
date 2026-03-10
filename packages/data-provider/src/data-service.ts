@@ -135,6 +135,8 @@ export function getAdminUsers(params?: {
   page?: number;
   pageSize?: number;
   search?: string;
+  sortBy?: string;
+  sortDirection?: string;
 }): Promise<t.TAdminUsersResponse> {
   return request.get(endpoints.adminUsers(params));
 }
@@ -151,6 +153,12 @@ export function addAdminUserBalance(
   amount: number,
 ): Promise<{ tokenCredits: number }> {
   return request.post(endpoints.adminUserBalanceAdd(userId), { amount });
+}
+
+export function setAllAdminUsersBalance(
+  amount: number,
+): Promise<{ updatedCount: number; amount: number }> {
+  return request.post(endpoints.adminUsersBalanceSetAll(), { amount });
 }
 
 export function banAdminUser(

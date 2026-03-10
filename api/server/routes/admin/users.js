@@ -6,6 +6,12 @@ const router = express.Router();
 
 router.get('/stats', middleware.requireJwtAuth, middleware.checkAdmin, adminUsersController.getStats);
 router.get('/users', middleware.requireJwtAuth, middleware.checkAdmin, adminUsersController.listUsers);
+router.post(
+  '/users/balance/set-all',
+  middleware.requireJwtAuth,
+  middleware.checkAdmin,
+  adminUsersController.setAllUsersBalance,
+);
 router.put(
   '/users/:userId/balance',
   middleware.requireJwtAuth,

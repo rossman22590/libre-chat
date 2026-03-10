@@ -51,15 +51,24 @@ export const balanceTransactions = (limit?: number) => {
 
 const adminRoot = () => `${BASE_URL}/api/admin`;
 export const adminStats = () => `${adminRoot()}/stats`;
-export const adminUsers = (params?: { page?: number; pageSize?: number; search?: string }) => {
+export const adminUsers = (params?: {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  sortBy?: string;
+  sortDirection?: string;
+}) => {
   const searchParams = new URLSearchParams();
   if (params?.page != null) searchParams.set('page', String(params.page));
   if (params?.pageSize != null) searchParams.set('pageSize', String(params.pageSize));
   if (params?.search != null) searchParams.set('search', params.search);
+  if (params?.sortBy != null) searchParams.set('sortBy', params.sortBy);
+  if (params?.sortDirection != null) searchParams.set('sortDirection', params.sortDirection);
   const q = searchParams.toString();
   return `${adminRoot()}/users${q ? `?${q}` : ''}`;
 };
 export const adminUserBalance = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/balance`;
+export const adminUsersBalanceSetAll = () => `${adminRoot()}/users/balance/set-all`;
 export const adminUserBalanceAdd = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/balance/add`;
 export const adminUserBan = (userId: string) => `${adminRoot()}/users/${encodeURIComponent(userId)}/ban`;
 export const adminUserTransactions = (userId: string, params?: { limit?: number }) => {

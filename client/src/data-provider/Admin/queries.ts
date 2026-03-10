@@ -16,12 +16,14 @@ export const useGetAdminUsers = (params?: {
   page?: number;
   pageSize?: number;
   search?: string;
+  sortBy?: string;
+  sortDirection?: string;
   enabled?: boolean;
 }) => {
-  const { page = 1, pageSize = 20, search = '', enabled = true } = params ?? {};
+  const { page = 1, pageSize = 20, search = '', sortBy, sortDirection, enabled = true } = params ?? {};
   return useQuery<TAdminUsersResponse>(
-    [QueryKeys.adminUsers, page, pageSize, search],
-    () => dataService.getAdminUsers({ page, pageSize, search }),
+    [QueryKeys.adminUsers, page, pageSize, search, sortBy, sortDirection],
+    () => dataService.getAdminUsers({ page, pageSize, search, sortBy, sortDirection }),
     { enabled },
   );
 };
