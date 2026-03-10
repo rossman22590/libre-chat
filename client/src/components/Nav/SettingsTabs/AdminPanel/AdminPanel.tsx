@@ -32,6 +32,40 @@ const formatDate = (date: Date | string | undefined): string => {
   return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
 };
 
+const getNextRefillDate = (
+  lastRefill: string | Date | undefined,
+  value: number | undefined,
+  unit: string | undefined,
+): Date | null => {
+  if (!lastRefill || value == null || !unit) return null;
+  const date = typeof lastRefill === 'string' ? new Date(lastRefill) : lastRefill;
+  if (Number.isNaN(date.getTime())) return null;
+  const next = new Date(date);
+  switch (unit) {
+    case 'seconds':
+      next.setSeconds(next.getSeconds() + value);
+      break;
+    case 'minutes':
+      next.setMinutes(next.getMinutes() + value);
+      break;
+    case 'hours':
+      next.setHours(next.getHours() + value);
+      break;
+    case 'days':
+      next.setDate(next.getDate() + value);
+      break;
+    case 'weeks':
+      next.setDate(next.getDate() + value * 7);
+      break;
+    case 'months':
+      next.setMonth(next.getMonth() + value);
+      break;
+    default:
+      return null;
+  }
+  return next;
+};
+
 const getContextLabel = (context: string | undefined, localize: (key: string) => string): string => {
   if (!context) return '—';
   const key = CONTEXT_KEYS[context];
@@ -393,6 +427,7 @@ const AdminPanel: React.FC = () => {
                         ))}
                     </button>
                   </th>
+                  <th className="p-2 font-medium">{localize('com_nav_admin_last_refill')}</th>
                   <th className="p-2 font-medium">{localize('com_nav_admin_actions')}</th>
                 </tr>
               </thead>
@@ -422,6 +457,7 @@ const AdminPanel: React.FC = () => {
                     <td className="p-2 font-medium">{user.tokenCredits.toLocaleString()}</td>
                     <td className="p-2">{user.conversationCount ?? 0}</td>
                     <td className="p-2 text-token-text-secondary">{formatDate(user.createdAt)}</td>
+                    <td className="p-2 text-token-text-secondary">{formatDate(user.lastRefill ?? undefined)}</td>
                     <td className="p-2">
                       {user.isBanned && (
                         <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
@@ -521,22 +557,42 @@ const AdminPanel: React.FC = () => {
             className={`flex w-full flex-col bg-background shadow-xl ${isUserDetailFullscreen ? '' : 'max-w-3xl sm:w-[32rem]'}`}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex shrink-0 flex-col gap-2 border-b border-border-subtle px-4 py-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-medium text-text-primary">
+            <div className="flex shrink-0 flex-col gap-4 border-b border-border-subtle bg-surface-secondary/30 px-4 py-4">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate text-lg font-semibold text-text-primary">
                     {selectedUser.name ?? selectedUser.username ?? selectedUser.email ?? '—'}
-                  </h3>
-                  <p className="text-xs text-token-text-secondary">{selectedUser.email}</p>
-                  <p className="mt-1 text-xs text-token-text-secondary">
+                  </h2>
+                  <p className="mt-0.5 truncate text-sm text-token-text-secondary">
+                    {selectedUser.email ?? '—'}
+                  </p>
+                  <p className="mt-2 text-sm text-text-primary">
                     {localize('com_nav_balance')}: {selectedUser.tokenCredits.toLocaleString()} · {localize('com_nav_admin_role')}: {selectedUser.role ?? '—'}
                   </p>
+                  {selectedUser.lastRefill != null && (
+                    <p className="mt-1 text-xs text-token-text-secondary">
+                      {localize('com_nav_admin_last_refill')}: {formatDate(selectedUser.lastRefill)}
+                    </p>
+                  )}
+                  {(() => {
+                    const next = getNextRefillDate(
+                      selectedUser.lastRefill ?? undefined,
+                      selectedUser.refillIntervalValue,
+                      selectedUser.refillIntervalUnit,
+                    );
+                    if (!next) return null;
+                    return (
+                      <p className="mt-0.5 text-xs text-token-text-secondary">
+                        {localize('com_nav_admin_next_refill')}: {formatDate(next)}
+                      </p>
+                    );
+                  })()}
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setIsUserDetailFullscreen((prev) => !prev)}
-                    className="rounded p-1 hover:bg-surface-secondary"
+                    className="rounded p-1.5 hover:bg-surface-secondary"
                     aria-label={isUserDetailFullscreen ? localize('com_ui_collapse') : localize('com_ui_expand')}
                   >
                     {isUserDetailFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
@@ -544,50 +600,56 @@ const AdminPanel: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleCloseUserDetail}
-                    className="rounded p-1 hover:bg-surface-secondary"
+                    className="rounded p-1.5 hover:bg-surface-secondary"
                     aria-label={localize('com_ui_close')}
                   >
                     <X className="h-5 w-5" />
                   </button>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Input
-                  type="number"
-                  min={0}
-                  placeholder={localize('com_nav_admin_set_balance')}
-                  value={balanceAmount[selectedUser._id] ?? ''}
-                  onChange={(e) =>
-                    setBalanceAmount((prev) => ({ ...prev, [selectedUser._id]: e.target.value }))
-                  }
-                  className="w-24"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleSetBalance(selectedUser)}
-                  disabled={setBalanceMutation.isLoading}
-                >
-                  {localize('com_nav_admin_set_balance')}
-                </Button>
-                <Input
-                  type="number"
-                  min={1}
-                  placeholder="+"
-                  value={addAmount[selectedUser._id] ?? ''}
-                  onChange={(e) => setAddAmount((prev) => ({ ...prev, [selectedUser._id]: e.target.value }))}
-                  className="w-20"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleAddBalance(selectedUser)}
-                  disabled={addBalanceMutation.isLoading}
-                >
-                  {localize('com_nav_admin_add_credits')}
-                </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="number"
+                    min={0}
+                    placeholder={localize('com_nav_admin_set_balance')}
+                    value={balanceAmount[selectedUser._id] ?? ''}
+                    onChange={(e) =>
+                      setBalanceAmount((prev) => ({ ...prev, [selectedUser._id]: e.target.value }))
+                    }
+                    className="w-24"
+                    aria-label={localize('com_nav_admin_set_balance')}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleSetBalance(selectedUser)}
+                    disabled={setBalanceMutation.isLoading}
+                  >
+                    {localize('com_nav_admin_set_balance')}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    type="number"
+                    min={1}
+                    placeholder="+"
+                    value={addAmount[selectedUser._id] ?? ''}
+                    onChange={(e) => setAddAmount((prev) => ({ ...prev, [selectedUser._id]: e.target.value }))}
+                    className="w-20"
+                    aria-label={localize('com_nav_admin_add_credits')}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleAddBalance(selectedUser)}
+                    disabled={addBalanceMutation.isLoading}
+                  >
+                    {localize('com_nav_admin_add_credits')}
+                  </Button>
+                </div>
               </div>
             </div>
             <div className="flex border-b border-border-subtle">

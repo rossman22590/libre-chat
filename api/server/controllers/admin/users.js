@@ -78,7 +78,9 @@ async function listUsers(req, res) {
     const userObjectIds = users.map((u) => u._id);
     const userStringIds = users.map((u) => u._id.toString());
     const [balances, conversationCounts] = await Promise.all([
-      Balance.find({ user: { $in: userObjectIds } }).select('user tokenCredits').lean(),
+      Balance.find({ user: { $in: userObjectIds } })
+        .select('user tokenCredits lastRefill refillIntervalValue refillIntervalUnit')
+        .lean(),
       Conversation.aggregate([
         { $match: { user: { $in: userStringIds } } },
         { $group: { _id: '$user', count: { $sum: 1 } } },
@@ -88,20 +90,39 @@ async function listUsers(req, res) {
     const balanceByUser = new Map(
       balances.map((b) => [b.user.toString(), b.tokenCredits ?? 0]),
     );
+    const lastRefillByUser = new Map(
+      balances.map((b) => [b.user.toString(), b.lastRefill ?? null]),
+    );
+    const refillIntervalByUser = new Map(
+      balances.map((b) => [
+        b.user.toString(),
+        {
+          value: b.refillIntervalValue,
+          unit: b.refillIntervalUnit,
+        },
+      ]),
+    );
     const convoCountByUser = new Map(
       conversationCounts.map((c) => [c._id.toString(), c.count]),
     );
 
-    let items = users.map((u) => ({
-      _id: u._id.toString(),
-      email: u.email,
-      name: u.name,
-      username: u.username,
-      role: u.role,
-      createdAt: u.createdAt,
-      tokenCredits: balanceByUser.get(u._id.toString()) ?? 0,
-      conversationCount: convoCountByUser.get(u._id.toString()) ?? 0,
-    }));
+    let items = users.map((u) => {
+      const id = u._id.toString();
+      const interval = refillIntervalByUser.get(id);
+      return {
+        _id: id,
+        email: u.email,
+        name: u.name,
+        username: u.username,
+        role: u.role,
+        createdAt: u.createdAt,
+        tokenCredits: balanceByUser.get(id) ?? 0,
+        conversationCount: convoCountByUser.get(id) ?? 0,
+        lastRefill: lastRefillByUser.get(id) ?? null,
+        refillIntervalValue: interval?.value,
+        refillIntervalUnit: interval?.unit,
+      };
+    });
 
     if (sortByJoinedField) {
       const mult = sortDirection === 1 ? 1 : -1;

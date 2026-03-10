@@ -480,6 +480,8 @@
   "com_nav_admin_quick_actions": "Quick actions",
   "com_nav_admin_tab_conversations": "Conversations",
   "com_nav_admin_tab_credits": "Credit history",
+  "com_nav_admin_last_refill": "Last refill",
+  "com_nav_admin_next_refill": "Next refill",
   "com_nav_browser": "Browser",
   "com_nav_center_chat_input": "Center Chat Input on Welcome Screen",
   "com_nav_change_picture": "Change picture",

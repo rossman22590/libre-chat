@@ -709,6 +709,9 @@ export type TAdminUserItem = {
   tokenCredits: number;
   conversationCount?: number;
   isBanned?: boolean;
+  lastRefill?: string | null;
+  refillIntervalValue?: number;
+  refillIntervalUnit?: string;
 };
 
 export type TAdminStatsResponse = {
