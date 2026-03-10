@@ -60,6 +60,10 @@ function buildUpdateFields(
     updateFields.refillAmount = config.refillAmount;
   }
 
+  if (config.resetToAmountEveryInterval != null && userRecord?.resetToAmountOnInterval !== config.resetToAmountEveryInterval) {
+    updateFields.resetToAmountOnInterval = config.resetToAmountEveryInterval;
+  }
+
   // Initialize lastRefill if it's missing when auto-refill is enabled
   if (config.autoRefillEnabled && !userRecord?.lastRefill) {
     updateFields.lastRefill = new Date();

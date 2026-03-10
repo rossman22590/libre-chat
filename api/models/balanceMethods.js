@@ -1,6 +1,6 @@
 const { logger } = require('@librechat/data-schemas');
 const { ViolationTypes } = require('librechat-data-provider');
-const { createAutoRefillTransaction } = require('./Transaction');
+const { createAutoRefillTransaction, createBalanceResetTransaction } = require('./Transaction');
 const { logViolation } = require('~/cache');
 const { getMultiplier } = require('./tx');
 const { Balance } = require('~/db/models');
@@ -49,8 +49,32 @@ const checkBalanceRecord = async function ({
     endpointTokenConfig: !!endpointTokenConfig,
   });
 
-  // Only perform auto-refill if spending would bring the balance to 0 or below
-  if (balance - tokenCost <= 0 && record.autoRefillEnabled && record.refillAmount > 0) {
+  // Reset to refillAmount every interval when resetToAmountOnInterval is enabled (e.g. "put back to 600k every 6 hours")
+  if (
+    record.resetToAmountOnInterval &&
+    record.autoRefillEnabled &&
+    record.refillAmount > 0 &&
+    (isInvalidDate(new Date(record.lastRefill)) ||
+      new Date() >=
+        addIntervalToDate(
+          new Date(record.lastRefill),
+          record.refillIntervalValue,
+          record.refillIntervalUnit,
+        ))
+  ) {
+    try {
+      const result = await createBalanceResetTransaction({
+        user,
+        refillAmount: record.refillAmount,
+        currentBalance: balance,
+      });
+      balance = result.balance;
+    } catch (error) {
+      logger.error('[Balance.check] Failed to reset balance to amount', error);
+    }
+  }
+  // Only perform auto-refill if spending would bring the balance to 0 or below (and reset-to-amount did not run)
+  else if (balance - tokenCost <= 0 && record.autoRefillEnabled && record.refillAmount > 0) {
     const lastRefillDate = new Date(record.lastRefill);
     const now = new Date();
     if (

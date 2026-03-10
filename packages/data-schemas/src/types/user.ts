@@ -52,6 +52,8 @@ export interface BalanceConfig {
   refillIntervalValue?: number;
   refillIntervalUnit?: string;
   refillAmount?: number;
+  /** When true, every refill interval set balance to refillAmount (reset to X every N hours) */
+  resetToAmountEveryInterval?: boolean;
 }
 
 export interface CreateUserRequest extends Partial<IUser> {

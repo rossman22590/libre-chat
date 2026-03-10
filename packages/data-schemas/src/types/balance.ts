@@ -9,4 +9,6 @@ export interface IBalance extends Document {
   refillIntervalUnit: 'seconds' | 'minutes' | 'hours' | 'days' | 'weeks' | 'months';
   lastRefill: Date;
   refillAmount: number;
+  /** When true, every interval set balance to refillAmount (reset to X every N hours) instead of adding */
+  resetToAmountOnInterval?: boolean;
 }

@@ -919,6 +919,8 @@ export const balanceSchema = z.object({
     .optional()
     .default('days'),
   refillAmount: z.number().optional().default(10000),
+  /** When true, every refill interval set balance to refillAmount (reset to X every N hours) */
+  resetToAmountEveryInterval: z.boolean().optional().default(false),
 });
 
 export const transactionsSchema = z.object({

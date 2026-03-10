@@ -36,6 +36,11 @@ const balanceSchema = new Schema<t.IBalance>({
     type: Number,
     default: 0,
   },
+  // when true, every refill interval set balance to refillAmount instead of adding (reset to X every N hours)
+  resetToAmountOnInterval: {
+    type: Boolean,
+    default: false,
+  },
 });
 
 export default balanceSchema;

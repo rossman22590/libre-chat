@@ -52,6 +52,38 @@ async function createAutoRefillTransaction(txData) {
 }
 
 /**
+ * Sets user balance to refillAmount and records a transaction (for "reset to X every N hours").
+ * @param {object} params
+ * @param {string} params.user - User ID
+ * @param {number} params.refillAmount - Balance is set to this value
+ * @param {number} params.currentBalance - Current balance (for transaction delta)
+ * @returns {Promise<{ balance: number }>}
+ */
+async function createBalanceResetTransaction({ user, refillAmount, currentBalance }) {
+  const delta = refillAmount - currentBalance;
+  const transaction = new Transaction({
+    user,
+    tokenType: 'credits',
+    context: 'autoRefill',
+    rawAmount: delta,
+  });
+  calculateTokenValue(transaction);
+  await transaction.save();
+
+  const balanceResponse = await updateBalance({
+    user,
+    incrementValue: 0,
+    setValues: { tokenCredits: refillAmount, lastRefill: new Date() },
+  });
+  logger.debug('[Balance.check] Reset-to-amount performed', {
+    user,
+    previousBalance: currentBalance,
+    newBalance: balanceResponse.tokenCredits,
+  });
+  return { balance: balanceResponse.tokenCredits };
+}
+
+/**
  * Static method to create a transaction and update the balance
  * @param {txData} _txData - Transaction data.
  */
@@ -219,5 +251,6 @@ module.exports = {
   getTransactions,
   createTransaction,
   createAutoRefillTransaction,
+  createBalanceResetTransaction,
   createStructuredTransaction,
 };

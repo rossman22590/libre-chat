@@ -376,6 +376,8 @@ balance:
   refillIntervalValue: 6
   refillIntervalUnit: 'hours'
   refillAmount: 600000
+  # Set balance back to refillAmount every 6 hours (on user's next request after interval)
+  resetToAmountEveryInterval: true
 
 speech:
   tts:
