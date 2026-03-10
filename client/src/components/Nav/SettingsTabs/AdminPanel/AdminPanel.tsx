@@ -478,9 +478,9 @@ const AdminPanel: React.FC = () => {
                     <td className="min-w-0 overflow-hidden p-1.5">
                       <span className="block w-full min-w-0 max-w-full truncate">{user.role ?? '—'}</span>
                     </td>
-                    <td className="min-w-0 overflow-hidden p-1.5 font-medium text-token-text-primary" title={`${user.tokenCredits.toLocaleString()} ${formatTrueCost(user.tokenCredits)}`}>
-                      <span className="inline-block min-w-0 max-w-full truncate">{user.tokenCredits.toLocaleString()}</span>
-                      <span className="ml-0.5 shrink-0 text-token-text-secondary">({formatTrueCost(user.tokenCredits)})</span>
+                    <td className="min-w-0 overflow-hidden whitespace-nowrap p-1.5 font-medium text-token-text-primary" title={`${user.tokenCredits.toLocaleString()} ${formatTrueCost(user.tokenCredits)}`}>
+                      <span className="truncate">{user.tokenCredits.toLocaleString()}</span>
+                      <span className="text-token-text-secondary"> ({formatTrueCost(user.tokenCredits)})</span>
                     </td>
                     <td className="overflow-hidden whitespace-nowrap p-1.5 font-medium text-token-text-secondary" aria-label={formatTrueCost((user as TAdminUserItem & { totalSpentTokenCredits?: number }).totalSpentTokenCredits ?? 0)}>
                       {formatTrueCost((user as TAdminUserItem & { totalSpentTokenCredits?: number }).totalSpentTokenCredits ?? 0)}
