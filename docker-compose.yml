@@ -23,6 +23,14 @@ services:
       - ./images:/app/client/public/images
       - ./uploads:/app/uploads
       - ./logs:/app/logs
+  mongodb:
+    container_name: chat-mongodb
+    image: mongo:8.0.20
+    restart: always
+    user: "${UID}:${GID}"
+    volumes:
+      - ./data-node:/data/db
+    command: mongod --noauth
   meilisearch:
     container_name: chat-meilisearch
     image: getmeili/meilisearch:v1.35.1
