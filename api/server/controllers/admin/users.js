@@ -1,11 +1,15 @@
 const { User, Balance, Conversation, Message, Transaction } = require('~/db/models');
 const getLogStores = require('~/cache/getLogStores');
 const { ViolationTypes } = require('librechat-data-provider');
-const { getConvosByCursor } = require('~/models/Conversation');
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 const TRANSACTIONS_DAYS = 40;
+const DEFAULT_CONVERSATION_LIMIT = 25;
+const MAX_CONVERSATION_LIMIT = 100;
+const CONVERSATION_SORT_FIELDS = new Set(['title', 'createdAt', 'updatedAt']);
+const CONVERSATION_SELECT_FIELDS =
+  'conversationId endpoint title createdAt updatedAt user model agent_id assistant_id spec iconURL';
 
 async function getStats(req, res) {
   try {
@@ -244,22 +248,90 @@ async function addUserBalance(req, res) {
 async function getUserConversations(req, res) {
   try {
     const { userId } = req.params;
-    const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
-    const cursor = req.query.cursor || undefined;
-    const sortBy = req.query.sortBy || 'updatedAt';
-    const sortDirection = req.query.sortDirection || 'desc';
+    const requestedLimit = parseInt(req.query.limit, 10) || DEFAULT_CONVERSATION_LIMIT;
+    const limit = Math.min(Math.max(requestedLimit, 1), MAX_CONVERSATION_LIMIT);
+    const sortBy = CONVERSATION_SORT_FIELDS.has(req.query.sortBy) ? req.query.sortBy : 'updatedAt';
+    const sortOrder = req.query.sortDirection === 'asc' ? 1 : -1;
+    const filters = [
+      { user: userId },
+      { $or: [{ isArchived: false }, { isArchived: { $exists: false } }] },
+      { $or: [{ expiredAt: null }, { expiredAt: { $exists: false } }] },
+    ];
 
-    const result = await getConvosByCursor(userId, {
-      cursor,
-      limit,
-      sortBy,
-      sortDirection,
+    const cursorFilter = parseConversationCursor(req.query.cursor, sortBy, sortOrder);
+    if (cursorFilter) {
+      filters.push(cursorFilter);
+    }
+
+    const sort = { [sortBy]: sortOrder };
+    if (sortBy !== 'updatedAt') {
+      sort.updatedAt = sortOrder;
+    }
+
+    const conversations = await Conversation.find({ $and: filters })
+      .select(CONVERSATION_SELECT_FIELDS)
+      .sort(sort)
+      .limit(limit + 1)
+      .lean();
+
+    const hasNextPage = conversations.length > limit;
+    if (hasNextPage) {
+      conversations.pop();
+    }
+
+    res.status(200).json({
+      conversations,
+      nextCursor: hasNextPage ? createConversationCursor(conversations.at(-1), sortBy) : null,
     });
-
-    res.status(200).json(result);
   } catch (err) {
     res.status(500).json({ error: 'Failed to load conversations' });
   }
+}
+
+function parseConversationCursor(cursor, sortBy, sortOrder) {
+  if (!cursor || typeof cursor !== 'string') {
+    return null;
+  }
+
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString());
+    const { primary, secondary } = decoded;
+    const primaryValue = sortBy === 'title' ? primary : new Date(primary);
+    const secondaryValue = new Date(secondary);
+    const op = sortOrder === 1 ? '$gt' : '$lt';
+
+    return {
+      $or: [
+        { [sortBy]: { [op]: primaryValue } },
+        {
+          [sortBy]: primaryValue,
+          updatedAt: { [op]: secondaryValue },
+        },
+      ],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function createConversationCursor(conversation, sortBy) {
+  if (!conversation) {
+    return null;
+  }
+
+  let primary = conversation.updatedAt;
+  if (sortBy === 'title') {
+    primary = conversation.title;
+  } else if (sortBy === 'createdAt') {
+    primary = conversation.createdAt;
+  }
+
+  const cursor = {
+    primary: sortBy === 'title' ? primary : new Date(primary ?? 0).toISOString(),
+    secondary: new Date(conversation.updatedAt ?? 0).toISOString(),
+  };
+
+  return Buffer.from(JSON.stringify(cursor)).toString('base64');
 }
 
 async function getConversationMessages(req, res) {
