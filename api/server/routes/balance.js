@@ -4,9 +4,13 @@ const router = express.Router();
 const balanceController = require('../controllers/Balance');
 const { requireJwtAuth } = require('../middleware/');
 const { getAppConfig } = require('~/server/services/Config');
-const { Balance } = require('~/db/models');
+const { findBalanceByUser, upsertBalanceFields } = require('~/models');
 
-const setBalanceConfig = createSetBalanceConfig({ getAppConfig, Balance });
+const setBalanceConfig = createSetBalanceConfig({
+  getAppConfig,
+  findBalanceByUser,
+  upsertBalanceFields,
+});
 
 router.get('/', requireJwtAuth, setBalanceConfig, balanceController);
 router.get(
