@@ -393,13 +393,13 @@ speech:
     conversationMode: false
     advancedMode: true
     speechToText:
-      engineSTT: "external"
+      engineSTT: "openai"
       languageSTT: "English (US)"
       autoTranscribeAudio: false
       decibelValue: -45
       autoSendText: 0
     textToSpeech:
-      engineTTS: "external"
+      engineTTS: "openai"
       voice: "alloy"
       languageTTS: "en"
       automaticPlayback: false
