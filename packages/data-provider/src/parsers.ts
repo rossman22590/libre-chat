@@ -196,9 +196,23 @@ export const parseConvo = ({
   return convo;
 };
 
+/** Match omni models (o1, o3, etc.), "o" followed by a digit, possibly with decimal */
+const extractOmniVersion = (modelStr: string): string => {
+  const omniMatch = modelStr.match(/\bo(\d+(?:\.\d+)?)\b/i);
+  if (omniMatch) {
+    const version = omniMatch[1];
+    return `o${version}`;
+  }
+  return '';
+};
+
 export const getResponseSender = (endpointOption: TEndpointOption): string => {
   const { model, endpoint, endpointType, modelDisplayLabel, chatGptLabel, modelLabel, jailbreak } =
     endpointOption;
+  const isOpenRouterCustomEndpoint =
+    endpointType === EModelEndpoint.custom &&
+    typeof endpoint === 'string' &&
+    endpoint.toLowerCase().includes('openrouter');
 
   if (
     [
@@ -245,7 +259,11 @@ export const getResponseSender = (endpointOption: TEndpointOption): string => {
       return modelLabel;
     } else if (chatGptLabel) {
       return chatGptLabel;
-    } else if (model && model.includes('mistral')) {
+    } else if (isOpenRouterCustomEndpoint && model) {
+      return model;
+    } else if (model && extractOmniVersion(model)) {
+      return extractOmniVersion(model);
+    } else if (model && (model.includes('mistral') || model.includes('codestral'))) {
       return 'Mistral';
     } else if (model && model.includes('gpt-3')) {
       return 'GPT-3.5';
