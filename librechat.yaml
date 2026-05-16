@@ -372,11 +372,11 @@ registration:
 
 balance:
   enabled: true
-  startBalance: 600000
+  startBalance: 2500000
   autoRefillEnabled: true
   refillIntervalValue: 6
   refillIntervalUnit: 'hours'
-  refillAmount: 600000
+  refillAmount: 2500000
 
 speech:
   tts:
