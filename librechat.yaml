@@ -315,6 +315,7 @@ interface:
   sidePanel: true
   presets: true
   prompts: true
+  skills: true
   bookmarks: true
   multiConvo: true
   agents: true
@@ -575,14 +576,18 @@ endpoints:
     disableBuilder: false
     recursionLimit: 50
     capabilities:
+      - "deferred_tools"
       - "execute_code"
-      - "actions"
-      - "artifacts"
-      - "ocr"
       - "file_search"
-      - "tools"
+      - "web_search"
+      - "artifacts"
+      - "subagents"
+      - "actions"
       - "context"
-      - "web_search" 
+      - "skills"
+      - "tools"
+      - "chain"
+      - "ocr"
   assistants:
     disableBuilder: true
     pollIntervalMs: 750  # Polling interval for checking assistant updates
