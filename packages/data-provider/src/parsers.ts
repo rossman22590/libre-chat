@@ -233,6 +233,11 @@ export const getResponseSender = (endpointOption: Partial<t.TEndpointOption>): s
   const modelDisplayLabel = _mdl ?? '';
   const chatGptLabel = _cgl ?? '';
   const modelLabel = _ml ?? '';
+  const isOpenRouterCustomEndpoint =
+    endpointType === EModelEndpoint.custom &&
+    typeof _e === 'string' &&
+    _e.toLowerCase().includes(Providers.OPENROUTER);
+
   if (
     [EModelEndpoint.openAI, EModelEndpoint.bedrock, EModelEndpoint.azureOpenAI].includes(endpoint)
   ) {
@@ -282,6 +287,8 @@ export const getResponseSender = (endpointOption: Partial<t.TEndpointOption>): s
     } else if (chatGptLabel) {
       // @deprecated - prefer modelLabel
       return chatGptLabel;
+    } else if (isOpenRouterCustomEndpoint && model) {
+      return model;
     } else if (model && extractOmniVersion(model)) {
       return extractOmniVersion(model);
     } else if (model && (model.includes('mistral') || model.includes('codestral'))) {
