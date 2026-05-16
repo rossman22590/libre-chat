@@ -60,6 +60,31 @@ function addOpenRouterDefaults(endpoint) {
   };
 }
 
+function summarizeConfigForLog(customConfig) {
+  const customEndpoints = (customConfig.endpoints?.custom ?? [])
+    .map((endpoint) => endpoint.name)
+    .filter(Boolean);
+
+  return {
+    version: customConfig.version,
+    cache: customConfig.cache,
+    interface: {
+      keys: Object.keys(customConfig.interface ?? {}),
+      skills: customConfig.interface?.skills,
+      agents: customConfig.interface?.agents,
+      marketplace: customConfig.interface?.marketplace,
+    },
+    endpoints: {
+      agents: {
+        disableBuilder: customConfig.endpoints?.agents?.disableBuilder,
+        capabilities: customConfig.endpoints?.agents?.capabilities,
+      },
+      custom: customEndpoints,
+    },
+    modelSpecs: customConfig.modelSpecs?.list?.length ?? 0,
+  };
+}
+
 /**
  * Load custom configuration files and caches the object if the `cache` field at root is true.
  * Validation via parsing the config file with the config schema.
@@ -156,8 +181,8 @@ https://www.librechat.ai/docs/configuration/stt_tts`);
     process.exit(1);
   } else {
     if (printConfig) {
-      logger.info('Custom config file loaded:');
-      logger.info(JSON.stringify(customConfig, null, 2));
+      logger.info('Custom config file loaded.');
+      logger.info(JSON.stringify(summarizeConfigForLog(customConfig), null, 2));
       logger.debug('Custom config:', customConfig);
     }
   }

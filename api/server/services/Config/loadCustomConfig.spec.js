@@ -228,8 +228,31 @@ describe('loadCustomConfig', () => {
     process.env.CONFIG_PATH = 'validConfig.yaml';
     loadYaml.mockReturnValueOnce(mockConfig);
     await loadCustomConfig();
-    expect(logger.info).toHaveBeenCalledWith('Custom config file loaded:');
-    expect(logger.info).toHaveBeenCalledWith(JSON.stringify(mockConfig, null, 2));
+    expect(logger.info).toHaveBeenCalledWith('Custom config file loaded.');
+    expect(logger.info).toHaveBeenCalledWith(
+      JSON.stringify(
+        {
+          version: '1.0',
+          cache: true,
+          interface: {
+            keys: [],
+            skills: undefined,
+            agents: undefined,
+            marketplace: undefined,
+          },
+          endpoints: {
+            agents: {
+              disableBuilder: undefined,
+              capabilities: undefined,
+            },
+            custom: ['mistral'],
+          },
+          modelSpecs: 0,
+        },
+        null,
+        2,
+      ),
+    );
     expect(logger.debug).toHaveBeenCalledWith('Custom config:', mockConfig);
   });
 
