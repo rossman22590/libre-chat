@@ -16,6 +16,7 @@ import type { TAdminUserItem, TBalanceTransactionItem } from 'librechat-data-pro
 import type { TMessage } from 'librechat-data-provider';
 
 const PAGE_SIZE = 20;
+const MESSAGE_PREVIEW_CHARS = 1200;
 
 const CONTEXT_KEYS: Record<string, string> = {
   message: 'com_nav_balance_transaction_context_message',
@@ -108,6 +109,14 @@ const getMessageText = (message: AdminMessage): string => {
   return '—';
 };
 
+const getMessagePreview = (text: string, isExpanded: boolean): string => {
+  if (isExpanded || text.length <= MESSAGE_PREVIEW_CHARS) {
+    return text;
+  }
+
+  return `${text.slice(0, MESSAGE_PREVIEW_CHARS).trimEnd()}...`;
+};
+
 type UserDetailTab = 'conversations' | 'credits' | 'costs';
 
 type AdminUsersSortField =
@@ -130,6 +139,7 @@ const AdminPanel: React.FC = () => {
   const [addAmount, setAddAmount] = useState<Record<string, string>>({});
   const [selectedUser, setSelectedUser] = useState<TAdminUserItem | null>(null);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(new Set());
   const [userDetailTab, setUserDetailTab] = useState<UserDetailTab>('conversations');
   const [isUserDetailFullscreen, setIsUserDetailFullscreen] = useState(false);
   const [grantAllAmount, setGrantAllAmount] = useState('');
@@ -243,6 +253,22 @@ const AdminPanel: React.FC = () => {
   const transactions = transactionsQuery.data?.transactions ?? [];
   const usageSummary = transactionsQuery.data?.summary;
   const usdPerCredit = usageSummary?.usdPerCredit ?? 0.000001;
+
+  useEffect(() => {
+    setExpandedMessageIds(new Set());
+  }, [selectedConversationId]);
+
+  const toggleMessageExpanded = useCallback((messageId: string) => {
+    setExpandedMessageIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }, []);
 
   const handleCloseUserDetail = useCallback(() => {
     setSelectedUser(null);
@@ -777,25 +803,45 @@ const AdminPanel: React.FC = () => {
                       )}
                     {selectedConversationId &&
                       !messagesQuery.isLoading &&
-                      messages.map((msg: TMessage) => (
-                        <div
-                          key={msg.messageId}
-                          className="border-border-subtle border-b px-4 py-2 last:border-b-0"
-                        >
-                          <div className="text-token-text-secondary flex items-center gap-2 text-xs">
-                            <span>
-                              {msg.isCreatedByUser
-                                ? localize('com_ui_you')
-                                : (msg.sender ?? 'Assistant')}
-                            </span>
-                            <span>{formatDate(msg.createdAt)}</span>
-                            {msg.model && <span>{msg.model}</span>}
+                      messages.map((msg: TMessage) => {
+                        const messageId = msg.messageId;
+                        const messageText = getMessageText(msg as AdminMessage);
+                        const isLongMessage = messageText.length > MESSAGE_PREVIEW_CHARS;
+                        const isExpanded = expandedMessageIds.has(messageId);
+                        const displayedText = getMessagePreview(messageText, isExpanded);
+
+                        return (
+                          <div
+                            key={messageId}
+                            className="border-border-subtle border-b px-4 py-2 last:border-b-0"
+                          >
+                            <div className="text-token-text-secondary flex items-center gap-2 text-xs">
+                              <span>
+                                {msg.isCreatedByUser
+                                  ? localize('com_ui_you')
+                                  : (msg.sender ?? 'Assistant')}
+                              </span>
+                              <span>{formatDate(msg.createdAt)}</span>
+                              {msg.model && <span>{msg.model}</span>}
+                            </div>
+                            <div className="mt-1 whitespace-pre-wrap break-words text-text-primary">
+                              {displayedText}
+                            </div>
+                            {isLongMessage && (
+                              <button
+                                type="button"
+                                onClick={() => toggleMessageExpanded(messageId)}
+                                className="text-token-text-secondary mt-1 text-xs font-medium hover:text-text-primary hover:underline"
+                                aria-expanded={isExpanded}
+                              >
+                                {isExpanded
+                                  ? localize('com_ui_show_less')
+                                  : localize('com_ui_show_more')}
+                              </button>
+                            )}
                           </div>
-                          <div className="mt-1 break-words text-text-primary">
-                            {getMessageText(msg as AdminMessage)}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                   </div>
                 </div>
               )}
@@ -854,8 +900,8 @@ const AdminPanel: React.FC = () => {
                 </div>
               )}
               {userDetailTab === 'costs' && (
-                <div className="flex flex-col overflow-auto p-4">
-                  <h4 className="mb-2 text-sm font-medium text-text-primary">
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+                  <h4 className="mb-2 shrink-0 text-sm font-medium text-text-primary">
                     {localize('com_nav_admin_usage_by_model')}
                   </h4>
                   {transactionsQuery.isLoading && (
@@ -867,8 +913,8 @@ const AdminPanel: React.FC = () => {
                     </div>
                   )}
                   {usageSummary && (
-                    <div className="flex flex-col gap-4">
-                      <div className="border-border-subtle grid grid-cols-2 gap-2 rounded-md border bg-surface-primary-alt p-3 sm:grid-cols-3">
+                    <div className="flex min-h-0 flex-1 flex-col gap-4">
+                      <div className="border-border-subtle grid shrink-0 grid-cols-2 gap-2 rounded-md border bg-surface-primary-alt p-3 sm:grid-cols-3">
                         <div className="col-span-2 text-xs font-medium text-text-primary sm:col-span-3">
                           {localize('com_nav_admin_usage_summary')}
                           <span className="text-token-text-secondary ml-2 font-normal">
@@ -938,7 +984,7 @@ const AdminPanel: React.FC = () => {
                           </div>
                         </div>
                       </div>
-                      <div>
+                      <div className="flex min-h-0 flex-1 flex-col">
                         <div className="text-token-text-secondary mb-2 text-xs">
                           {localize('com_nav_admin_usage_by_model')}
                         </div>
@@ -948,7 +994,7 @@ const AdminPanel: React.FC = () => {
                           </div>
                         )}
                         {(usageSummary.modelBreakdown?.length ?? 0) > 0 && (
-                          <div className="flex max-h-80 flex-col gap-2 overflow-auto pr-1">
+                          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto pr-1">
                             {usageSummary.modelBreakdown?.map((modelUsage) => (
                               <div
                                 key={modelUsage.model ?? 'unknown'}
