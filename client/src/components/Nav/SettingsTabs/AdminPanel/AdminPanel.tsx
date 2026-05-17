@@ -108,7 +108,7 @@ const getMessageText = (message: AdminMessage): string => {
   return '—';
 };
 
-type UserDetailTab = 'conversations' | 'credits';
+type UserDetailTab = 'conversations' | 'credits' | 'costs';
 
 type AdminUsersSortField =
   | 'email'
@@ -610,7 +610,7 @@ const AdminPanel: React.FC = () => {
           onClick={(e) => e.target === e.currentTarget && handleCloseUserDetail()}
         >
           <div
-            className={`flex w-full flex-col bg-background shadow-xl ${isUserDetailFullscreen ? '' : 'max-w-3xl sm:w-[32rem]'}`}
+            className={`flex h-full min-h-0 w-full flex-col bg-background shadow-xl ${isUserDetailFullscreen ? '' : 'max-w-3xl sm:w-[32rem]'}`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="border-border-subtle flex shrink-0 flex-col gap-2 border-b px-4 py-3">
@@ -692,115 +692,8 @@ const AdminPanel: React.FC = () => {
                   {localize('com_nav_admin_add_credits')}
                 </Button>
               </div>
-              {transactionsQuery.isLoading && (
-                <div className="border-border-subtle text-token-text-secondary rounded-md border bg-surface-primary-alt p-3 text-xs">
-                  {localize('com_ui_loading')}
-                </div>
-              )}
-              {usageSummary && (
-                <div className="border-border-subtle grid grid-cols-2 gap-2 rounded-md border bg-surface-primary-alt p-3 sm:grid-cols-3">
-                  <div className="col-span-2 text-xs font-medium text-text-primary sm:col-span-3">
-                    {localize('com_nav_admin_usage_summary')}
-                    <span className="text-token-text-secondary ml-2 font-normal">
-                      {localize('com_nav_admin_usage_period', {
-                        days: String(usageSummary.periodDays ?? 40),
-                      } as Record<string, unknown>)}
-                    </span>
-                  </div>
-                  <div>
-                    <div className="text-token-text-secondary text-xs">
-                      {localize('com_nav_admin_usage_credits')}
-                    </div>
-                    <div className="font-semibold text-text-primary">
-                      {formatCredits(usageSummary.usageCredits)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-token-text-secondary text-xs">
-                      {localize('com_nav_admin_usage_cost')}
-                    </div>
-                    <div className="font-semibold text-text-primary">
-                      {formatUsd(usageSummary.usageUsd)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-token-text-secondary text-xs">
-                      {localize('com_nav_admin_usage_input')}
-                    </div>
-                    <div className="font-semibold text-text-primary">
-                      {formatUsd(usageSummary.inputUsd)}
-                    </div>
-                    <div className="text-token-text-secondary text-xs">
-                      {localize('com_nav_admin_usage_credits_and_tokens', {
-                        credits: formatCredits(usageSummary.inputCredits),
-                        tokens: formatCredits(usageSummary.inputTokens),
-                      } as Record<string, unknown>)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-token-text-secondary text-xs">
-                      {localize('com_nav_admin_usage_output')}
-                    </div>
-                    <div className="font-semibold text-text-primary">
-                      {formatUsd(usageSummary.outputUsd)}
-                    </div>
-                    <div className="text-token-text-secondary text-xs">
-                      {localize('com_nav_admin_usage_credits_and_tokens', {
-                        credits: formatCredits(usageSummary.outputCredits),
-                        tokens: formatCredits(usageSummary.outputTokens),
-                      } as Record<string, unknown>)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-token-text-secondary text-xs">
-                      {localize('com_nav_admin_usage_added')}
-                    </div>
-                    <div className="font-semibold text-text-primary">
-                      {formatCredits(usageSummary.addedCredits)}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-token-text-secondary text-xs">
-                      {localize('com_nav_admin_usage_net')}
-                    </div>
-                    <div className="font-semibold text-text-primary">
-                      {formatCredits(usageSummary.netCredits)}
-                    </div>
-                  </div>
-                  {(usageSummary.modelBreakdown?.length ?? 0) > 0 && (
-                    <div className="col-span-2 sm:col-span-3">
-                      <div className="text-token-text-secondary text-xs">
-                        {localize('com_nav_admin_usage_by_model')}
-                      </div>
-                      <div className="mt-2 flex flex-col gap-2">
-                        {usageSummary.modelBreakdown?.map((modelUsage) => (
-                          <div
-                            key={modelUsage.model ?? 'unknown'}
-                            className="border-border-subtle rounded border bg-surface-primary px-2 py-1.5"
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="truncate font-medium text-text-primary">
-                                {modelUsage.model ?? localize('com_nav_admin_unknown_model')}
-                              </span>
-                              <span className="shrink-0 font-semibold text-text-primary">
-                                {formatUsd(modelUsage.usageUsd)}
-                              </span>
-                            </div>
-                            <div className="text-token-text-secondary mt-1 text-xs">
-                              {localize('com_nav_admin_usage_model_io', {
-                                input: formatUsd(modelUsage.inputUsd),
-                                output: formatUsd(modelUsage.outputUsd),
-                              } as Record<string, unknown>)}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
-            <div className="border-border-subtle flex border-b">
+            <div className="border-border-subtle flex shrink-0 overflow-x-auto border-b">
               <button
                 type="button"
                 onClick={() => setUserDetailTab('conversations')}
@@ -814,6 +707,13 @@ const AdminPanel: React.FC = () => {
                 className={`px-4 py-2 text-sm font-medium ${userDetailTab === 'credits' ? 'border-token-text-primary border-b-2 text-text-primary' : 'text-token-text-secondary'}`}
               >
                 {localize('com_nav_admin_tab_credits')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setUserDetailTab('costs')}
+                className={`px-4 py-2 text-sm font-medium ${userDetailTab === 'costs' ? 'border-token-text-primary border-b-2 text-text-primary' : 'text-token-text-secondary'}`}
+              >
+                {localize('com_nav_admin_usage_by_model')}
               </button>
             </div>
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -949,6 +849,130 @@ const AdminPanel: React.FC = () => {
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+                </div>
+              )}
+              {userDetailTab === 'costs' && (
+                <div className="flex flex-col overflow-auto p-4">
+                  <h4 className="mb-2 text-sm font-medium text-text-primary">
+                    {localize('com_nav_admin_usage_by_model')}
+                  </h4>
+                  {transactionsQuery.isLoading && (
+                    <div className="text-token-text-secondary">{localize('com_ui_loading')}</div>
+                  )}
+                  {!transactionsQuery.isLoading && !usageSummary && (
+                    <div className="text-token-text-secondary">
+                      {localize('com_nav_balance_transaction_no_transactions')}
+                    </div>
+                  )}
+                  {usageSummary && (
+                    <div className="flex flex-col gap-4">
+                      <div className="border-border-subtle grid grid-cols-2 gap-2 rounded-md border bg-surface-primary-alt p-3 sm:grid-cols-3">
+                        <div className="col-span-2 text-xs font-medium text-text-primary sm:col-span-3">
+                          {localize('com_nav_admin_usage_summary')}
+                          <span className="text-token-text-secondary ml-2 font-normal">
+                            {localize('com_nav_admin_usage_period', {
+                              days: String(usageSummary.periodDays ?? 40),
+                            } as Record<string, unknown>)}
+                          </span>
+                        </div>
+                        <div>
+                          <div className="text-token-text-secondary text-xs">
+                            {localize('com_nav_admin_usage_credits')}
+                          </div>
+                          <div className="font-semibold text-text-primary">
+                            {formatCredits(usageSummary.usageCredits)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-token-text-secondary text-xs">
+                            {localize('com_nav_admin_usage_cost')}
+                          </div>
+                          <div className="font-semibold text-text-primary">
+                            {formatUsd(usageSummary.usageUsd)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-token-text-secondary text-xs">
+                            {localize('com_nav_admin_usage_input')}
+                          </div>
+                          <div className="font-semibold text-text-primary">
+                            {formatUsd(usageSummary.inputUsd)}
+                          </div>
+                          <div className="text-token-text-secondary text-xs">
+                            {localize('com_nav_admin_usage_credits_and_tokens', {
+                              credits: formatCredits(usageSummary.inputCredits),
+                              tokens: formatCredits(usageSummary.inputTokens),
+                            } as Record<string, unknown>)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-token-text-secondary text-xs">
+                            {localize('com_nav_admin_usage_output')}
+                          </div>
+                          <div className="font-semibold text-text-primary">
+                            {formatUsd(usageSummary.outputUsd)}
+                          </div>
+                          <div className="text-token-text-secondary text-xs">
+                            {localize('com_nav_admin_usage_credits_and_tokens', {
+                              credits: formatCredits(usageSummary.outputCredits),
+                              tokens: formatCredits(usageSummary.outputTokens),
+                            } as Record<string, unknown>)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-token-text-secondary text-xs">
+                            {localize('com_nav_admin_usage_added')}
+                          </div>
+                          <div className="font-semibold text-text-primary">
+                            {formatCredits(usageSummary.addedCredits)}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-token-text-secondary text-xs">
+                            {localize('com_nav_admin_usage_net')}
+                          </div>
+                          <div className="font-semibold text-text-primary">
+                            {formatCredits(usageSummary.netCredits)}
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-token-text-secondary mb-2 text-xs">
+                          {localize('com_nav_admin_usage_by_model')}
+                        </div>
+                        {(usageSummary.modelBreakdown?.length ?? 0) === 0 && (
+                          <div className="text-token-text-secondary">
+                            {localize('com_nav_balance_transaction_no_transactions')}
+                          </div>
+                        )}
+                        {(usageSummary.modelBreakdown?.length ?? 0) > 0 && (
+                          <div className="flex max-h-80 flex-col gap-2 overflow-auto pr-1">
+                            {usageSummary.modelBreakdown?.map((modelUsage) => (
+                              <div
+                                key={modelUsage.model ?? 'unknown'}
+                                className="border-border-subtle rounded border bg-surface-primary px-2 py-1.5"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="truncate font-medium text-text-primary">
+                                    {modelUsage.model ?? localize('com_nav_admin_unknown_model')}
+                                  </span>
+                                  <span className="shrink-0 font-semibold text-text-primary">
+                                    {formatUsd(modelUsage.usageUsd)}
+                                  </span>
+                                </div>
+                                <div className="text-token-text-secondary mt-1 text-xs">
+                                  {localize('com_nav_admin_usage_model_io', {
+                                    input: formatUsd(modelUsage.inputUsd),
+                                    output: formatUsd(modelUsage.outputUsd),
+                                  } as Record<string, unknown>)}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
