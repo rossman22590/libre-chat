@@ -697,12 +697,47 @@ export type TBalanceTransactionItem = {
   tokenType: 'prompt' | 'completion' | 'credits';
   rawAmount?: number;
   tokenValue?: number;
+  inputTokens?: number;
+  writeTokens?: number;
+  readTokens?: number;
+  rate?: number;
   model?: string;
   createdAt?: string;
 };
 
+export type TBalanceModelBreakdown = {
+  model?: string | null;
+  usageCredits: number;
+  usageUsd: number;
+  inputCredits: number;
+  inputUsd: number;
+  inputTokens: number;
+  outputCredits: number;
+  outputUsd: number;
+  outputTokens: number;
+  transactionCount: number;
+};
+
+export type TBalanceTransactionSummary = {
+  usageCredits: number;
+  usageUsd: number;
+  inputCredits: number;
+  inputUsd: number;
+  inputTokens: number;
+  outputCredits: number;
+  outputUsd: number;
+  outputTokens: number;
+  addedCredits: number;
+  netCredits: number;
+  transactionCount: number;
+  modelBreakdown?: TBalanceModelBreakdown[];
+  periodDays?: number;
+  usdPerCredit: number;
+};
+
 export type TBalanceTransactionsResponse = {
   transactions: TBalanceTransactionItem[];
+  summary?: TBalanceTransactionSummary;
 };
 
 export type TAdminUserItem = {

@@ -1,15 +1,23 @@
 const { User, Balance, Conversation, Message, Transaction } = require('~/db/models');
 const getLogStores = require('~/cache/getLogStores');
 const { ViolationTypes } = require('librechat-data-provider');
+const mongoose = require('mongoose');
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 const TRANSACTIONS_DAYS = 40;
+const USD_PER_CREDIT = 0.000001;
 const DEFAULT_CONVERSATION_LIMIT = 25;
 const MAX_CONVERSATION_LIMIT = 100;
 const CONVERSATION_SORT_FIELDS = new Set(['title', 'createdAt', 'updatedAt']);
 const CONVERSATION_SELECT_FIELDS =
   'conversationId endpoint title createdAt updatedAt user model agent_id assistant_id spec iconURL';
+
+function getTransactionsSince(date = new Date()) {
+  const since = new Date(date);
+  since.setDate(since.getDate() - TRANSACTIONS_DAYS);
+  return since;
+}
 
 async function getStats(req, res) {
   try {
@@ -22,14 +30,20 @@ async function getStats(req, res) {
     ]);
 
     res.status(200).json({ totalUsers, recentSignups });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to load stats' });
   }
 }
 
-const ALLOWED_SORT_FIELDS = ['email', 'name', 'role', 'createdAt', 'tokenCredits', 'conversationCount'];
+const ALLOWED_SORT_FIELDS = [
+  'email',
+  'name',
+  'role',
+  'createdAt',
+  'tokenCredits',
+  'conversationCount',
+];
 const DEFAULT_SORT_FIELD = 'createdAt';
-const DEFAULT_SORT_DIR = -1;
 const MAX_USERS_FOR_JOIN_SORT = 5000;
 
 function parseSort(req) {
@@ -82,19 +96,17 @@ async function listUsers(req, res) {
     const userObjectIds = users.map((u) => u._id);
     const userStringIds = users.map((u) => u._id.toString());
     const [balances, conversationCounts] = await Promise.all([
-      Balance.find({ user: { $in: userObjectIds } }).select('user tokenCredits').lean(),
+      Balance.find({ user: { $in: userObjectIds } })
+        .select('user tokenCredits')
+        .lean(),
       Conversation.aggregate([
         { $match: { user: { $in: userStringIds } } },
         { $group: { _id: '$user', count: { $sum: 1 } } },
       ]),
     ]);
 
-    const balanceByUser = new Map(
-      balances.map((b) => [b.user.toString(), b.tokenCredits ?? 0]),
-    );
-    const convoCountByUser = new Map(
-      conversationCounts.map((c) => [c._id.toString(), c.count]),
-    );
+    const balanceByUser = new Map(balances.map((b) => [b.user.toString(), b.tokenCredits ?? 0]));
+    const convoCountByUser = new Map(conversationCounts.map((c) => [c._id.toString(), c.count]));
 
     let items = users.map((u) => ({
       _id: u._id.toString(),
@@ -128,7 +140,7 @@ async function listUsers(req, res) {
       page,
       pageSize,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to list users' });
   }
 }
@@ -152,7 +164,7 @@ async function setUserBalance(req, res) {
     ).lean();
 
     res.status(200).json({ tokenCredits: balance.tokenCredits });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to set balance' });
   }
 }
@@ -176,7 +188,7 @@ async function setAllUsersBalance(req, res) {
     }
 
     res.status(200).json({ updatedCount, amount });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to set balance for all users' });
   }
 }
@@ -201,7 +213,7 @@ async function banUser(req, res) {
     });
 
     res.status(200).json({ banned: true, expiresAt });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to ban user' });
   }
 }
@@ -212,7 +224,7 @@ async function unbanUser(req, res) {
     const banLogs = getLogStores(ViolationTypes.BAN);
     await banLogs.delete(userId);
     res.status(200).json({ banned: false });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to unban user' });
   }
 }
@@ -240,7 +252,7 @@ async function addUserBalance(req, res) {
     });
 
     res.status(200).json({ tokenCredits: balance.tokenCredits });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to add balance' });
   }
 }
@@ -283,7 +295,7 @@ async function getUserConversations(req, res) {
       conversations,
       nextCursor: hasNextPage ? createConversationCursor(conversations.at(-1), sortBy) : null,
     });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Failed to load conversations' });
   }
 }
@@ -340,13 +352,17 @@ async function getConversationMessages(req, res) {
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
 
     const messages = await Message.find({ user: userId, conversationId })
-      .select('messageId conversationId sender text createdAt isCreatedByUser model endpoint')
+      .select(
+        'messageId conversationId sender text content summary createdAt isCreatedByUser model endpoint',
+      )
       .sort({ createdAt: 1 })
       .limit(limit)
       .lean();
 
-    res.status(200).json({ messages, nextCursor: messages.length === limit ? String(limit) : null });
-  } catch (err) {
+    res
+      .status(200)
+      .json({ messages, nextCursor: messages.length === limit ? String(limit) : null });
+  } catch {
     res.status(500).json({ error: 'Failed to load messages' });
   }
 }
@@ -355,17 +371,90 @@ async function getUserTransactions(req, res) {
   try {
     const { userId } = req.params;
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
-    const since = new Date();
-    since.setDate(since.getDate() - TRANSACTIONS_DAYS);
+    const now = new Date();
+    const since = getTransactionsSince(now);
+    const userMatch = mongoose.Types.ObjectId.isValid(userId)
+      ? new mongoose.Types.ObjectId(userId)
+      : userId;
 
-    const transactions = await Transaction.find({
-      user: userId,
+    const usageProjection = {
+      tokenType: 1,
+      model: 1,
+      amount: { $ifNull: ['$tokenValue', { $ifNull: ['$rawAmount', 0] }] },
+      rawAmount: { $ifNull: ['$rawAmount', 0] },
+    };
+    const usageGroupFields = {
+      usageCredits: {
+        $sum: {
+          $cond: [{ $lt: ['$amount', 0] }, { $multiply: ['$amount', -1] }, 0],
+        },
+      },
+      inputCredits: {
+        $sum: {
+          $cond: [
+            { $and: [{ $eq: ['$tokenType', 'prompt'] }, { $lt: ['$amount', 0] }] },
+            { $multiply: ['$amount', -1] },
+            0,
+          ],
+        },
+      },
+      outputCredits: {
+        $sum: {
+          $cond: [
+            { $and: [{ $eq: ['$tokenType', 'completion'] }, { $lt: ['$amount', 0] }] },
+            { $multiply: ['$amount', -1] },
+            0,
+          ],
+        },
+      },
+      inputTokens: {
+        $sum: {
+          $cond: [{ $eq: ['$tokenType', 'prompt'] }, { $abs: '$rawAmount' }, 0],
+        },
+      },
+      outputTokens: {
+        $sum: {
+          $cond: [{ $eq: ['$tokenType', 'completion'] }, { $abs: '$rawAmount' }, 0],
+        },
+      },
+      addedCredits: {
+        $sum: {
+          $cond: [{ $gt: ['$amount', 0] }, '$amount', 0],
+        },
+      },
+      netCredits: { $sum: '$amount' },
+      transactionCount: { $sum: 1 },
+    };
+
+    const transactionMatch = {
+      user: userMatch,
       createdAt: { $gte: since },
-    })
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .select('context tokenType rawAmount tokenValue model createdAt')
-      .lean();
+    };
+
+    const [transactions, summaries, modelSummaries] = await Promise.all([
+      Transaction.find({
+        user: userId,
+        createdAt: { $gte: since },
+      })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .select(
+          'context tokenType rawAmount tokenValue inputTokens writeTokens readTokens rate model createdAt',
+        )
+        .lean(),
+      Transaction.aggregate([
+        { $match: transactionMatch },
+        { $project: usageProjection },
+        { $group: { _id: null, ...usageGroupFields } },
+      ]),
+      Transaction.aggregate([
+        { $match: transactionMatch },
+        { $project: usageProjection },
+        { $match: { amount: { $lt: 0 }, tokenType: { $in: ['prompt', 'completion'] } } },
+        { $group: { _id: '$model', ...usageGroupFields } },
+        { $sort: { usageCredits: -1 } },
+      ]),
+    ]);
 
     const mapped = transactions.map((tx) => ({
       _id: tx._id.toString(),
@@ -373,12 +462,49 @@ async function getUserTransactions(req, res) {
       tokenType: tx.tokenType,
       rawAmount: tx.rawAmount,
       tokenValue: tx.tokenValue,
+      inputTokens: tx.inputTokens,
+      writeTokens: tx.writeTokens,
+      readTokens: tx.readTokens,
+      rate: tx.rate,
       model: tx.model,
       createdAt: tx.createdAt,
     }));
+    const summary = summaries[0] ?? {};
+    const usageCredits = summary.usageCredits ?? 0;
+    const inputCredits = summary.inputCredits ?? 0;
+    const outputCredits = summary.outputCredits ?? 0;
 
-    res.status(200).json({ transactions: mapped });
-  } catch (err) {
+    res.status(200).json({
+      transactions: mapped,
+      summary: {
+        usageCredits,
+        usageUsd: usageCredits * USD_PER_CREDIT,
+        inputCredits,
+        inputUsd: inputCredits * USD_PER_CREDIT,
+        inputTokens: summary.inputTokens ?? 0,
+        outputCredits,
+        outputUsd: outputCredits * USD_PER_CREDIT,
+        outputTokens: summary.outputTokens ?? 0,
+        addedCredits: summary.addedCredits ?? 0,
+        netCredits: summary.netCredits ?? 0,
+        transactionCount: summary.transactionCount ?? 0,
+        modelBreakdown: modelSummaries.map((item) => ({
+          model: item._id ?? null,
+          usageCredits: item.usageCredits ?? 0,
+          usageUsd: (item.usageCredits ?? 0) * USD_PER_CREDIT,
+          inputCredits: item.inputCredits ?? 0,
+          inputUsd: (item.inputCredits ?? 0) * USD_PER_CREDIT,
+          inputTokens: item.inputTokens ?? 0,
+          outputCredits: item.outputCredits ?? 0,
+          outputUsd: (item.outputCredits ?? 0) * USD_PER_CREDIT,
+          outputTokens: item.outputTokens ?? 0,
+          transactionCount: item.transactionCount ?? 0,
+        })),
+        periodDays: TRANSACTIONS_DAYS,
+        usdPerCredit: USD_PER_CREDIT,
+      },
+    });
+  } catch {
     res.status(500).json({ error: 'Failed to load transactions' });
   }
 }

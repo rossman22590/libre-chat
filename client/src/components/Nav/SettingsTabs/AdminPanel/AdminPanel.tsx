@@ -26,16 +26,86 @@ const CONTEXT_KEYS: Record<string, string> = {
   incomplete: 'com_nav_balance_transaction_context_incomplete',
 };
 
+const TOKEN_TYPE_KEYS: Record<TBalanceTransactionItem['tokenType'], TranslationKeys> = {
+  prompt: 'com_nav_admin_token_input' as TranslationKeys,
+  completion: 'com_nav_admin_token_output' as TranslationKeys,
+  credits: 'com_nav_admin_token_credits' as TranslationKeys,
+};
+
 const formatDate = (date: Date | string | undefined): string => {
   if (!date) return '—';
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
 };
 
-const getContextLabel = (context: string | undefined, localize: (key: string) => string): string => {
+const getContextLabel = (
+  context: string | undefined,
+  localize: (key: string) => string,
+): string => {
   if (!context) return '—';
   const key = CONTEXT_KEYS[context];
   return key ? localize(key) : context;
+};
+
+const getTokenTypeLabel = (
+  tokenType: TBalanceTransactionItem['tokenType'],
+  localize: (key: TranslationKeys) => string,
+): string => localize(TOKEN_TYPE_KEYS[tokenType]);
+
+const getTransactionCreditAmount = (tx: TBalanceTransactionItem): number =>
+  tx.tokenValue ?? tx.rawAmount ?? 0;
+
+const formatCredits = (value = 0): string =>
+  new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+
+const formatUsd = (value = 0): string =>
+  new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: value > 0 && value < 0.01 ? 6 : 2,
+    maximumFractionDigits: 6,
+  }).format(value);
+
+type MessageTextPart = { type?: string; text?: string };
+
+type AdminMessage = Omit<TMessage, 'text'> & {
+  text?: string | MessageTextPart[];
+  summary?: string;
+  content?: MessageTextPart[];
+};
+
+const getTextParts = (parts: MessageTextPart[] | undefined): string => {
+  if (!Array.isArray(parts)) {
+    return '';
+  }
+
+  return parts
+    .filter((part) => part?.type === 'text' || part?.type == null)
+    .map((part) => part?.text)
+    .filter(Boolean)
+    .join(' ');
+};
+
+const getMessageText = (message: AdminMessage): string => {
+  if (typeof message.text === 'string' && message.text.trim() !== '') {
+    return message.text;
+  }
+
+  const textParts = getTextParts(Array.isArray(message.text) ? message.text : undefined);
+  if (textParts.trim() !== '') {
+    return textParts;
+  }
+
+  const contentText = getTextParts(message.content);
+  if (contentText.trim() !== '') {
+    return contentText;
+  }
+
+  if (typeof message.summary === 'string' && message.summary.trim() !== '') {
+    return message.summary;
+  }
+
+  return '—';
 };
 
 type UserDetailTab = 'conversations' | 'credits';
@@ -65,7 +135,12 @@ const AdminPanel: React.FC = () => {
   const [grantAllAmount, setGrantAllAmount] = useState('');
 
   const { data: stats, refetch: refetchStats } = useGetAdminStats();
-  const { data, isLoading, isError, refetch: refetchUsers } = useGetAdminUsers({
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch: refetchUsers,
+  } = useGetAdminUsers({
     page,
     pageSize: PAGE_SIZE,
     search: search || undefined,
@@ -94,11 +169,14 @@ const AdminPanel: React.FC = () => {
   const setAllBalanceMutation = useSetAllAdminUsersBalanceMutation();
   const addBalanceMutation = useAddAdminUserBalanceMutation();
 
-  const handleSearchSubmit = useCallback((e: React.FormEvent) => {
-    e.preventDefault();
-    setSearch(searchInput.trim());
-    setPage(1);
-  }, [searchInput]);
+  const handleSearchSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      setSearch(searchInput.trim());
+      setPage(1);
+    },
+    [searchInput],
+  );
 
   const handleSetBalance = useCallback(
     (user: TAdminUserItem) => {
@@ -114,7 +192,8 @@ const AdminPanel: React.FC = () => {
           onSuccess: () => {
             showToast({ status: 'success', message: localize('com_ui_saved') });
             setBalanceAmount((prev) => ({ ...prev, [user._id]: '' }));
-            if (selectedUser?._id === user._id) setSelectedUser((u) => (u ? { ...u, tokenCredits: amount } : null));
+            if (selectedUser?._id === user._id)
+              setSelectedUser((u) => (u ? { ...u, tokenCredits: amount } : null));
           },
           onError: () => showToast({ status: 'error', message: localize('com_ui_error') }),
         },
@@ -138,7 +217,8 @@ const AdminPanel: React.FC = () => {
             const data = res as { tokenCredits: number };
             showToast({ status: 'success', message: localize('com_ui_saved') });
             setAddAmount((prev) => ({ ...prev, [vars.userId]: '' }));
-            if (selectedUser?._id === vars.userId) setSelectedUser((u) => (u ? { ...u, tokenCredits: data.tokenCredits } : null));
+            if (selectedUser?._id === vars.userId)
+              setSelectedUser((u) => (u ? { ...u, tokenCredits: data.tokenCredits } : null));
           },
           onError: () => showToast({ status: 'error', message: localize('com_ui_error') }),
         },
@@ -157,13 +237,12 @@ const AdminPanel: React.FC = () => {
     selectedConversationId,
     { limit: 100 },
   );
-  const transactionsQuery = useGetAdminUserTransactions(
-    selectedUser?._id ?? null,
-    { limit: 50, enabled: userDetailTab === 'credits' },
-  );
+  const transactionsQuery = useGetAdminUserTransactions(selectedUser?._id ?? null, { limit: 50 });
   const conversations = convosQuery.data?.conversations ?? [];
   const messages = messagesQuery.data?.messages ?? [];
   const transactions = transactionsQuery.data?.transactions ?? [];
+  const usageSummary = transactionsQuery.data?.summary;
+  const usdPerCredit = usageSummary?.usdPerCredit ?? 0.000001;
 
   const handleCloseUserDetail = useCallback(() => {
     setSelectedUser(null);
@@ -213,16 +292,27 @@ const AdminPanel: React.FC = () => {
     <div className="flex flex-col gap-6 text-sm text-text-primary">
       <div className="flex flex-wrap items-center justify-between gap-2">
         {stats && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-label={localize('com_nav_admin_dashboard')}>
-          <div className="rounded-lg border border-border-subtle bg-surface-primary-alt p-4">
-            <div className="text-token-text-secondary text-xs">{localize('com_nav_admin_total_users')}</div>
-            <div className="text-2xl font-semibold text-text-primary">{stats.totalUsers.toLocaleString()}</div>
+          <div
+            className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+            aria-label={localize('com_nav_admin_dashboard')}
+          >
+            <div className="border-border-subtle rounded-lg border bg-surface-primary-alt p-4">
+              <div className="text-token-text-secondary text-xs">
+                {localize('com_nav_admin_total_users')}
+              </div>
+              <div className="text-2xl font-semibold text-text-primary">
+                {stats.totalUsers.toLocaleString()}
+              </div>
+            </div>
+            <div className="border-border-subtle rounded-lg border bg-surface-primary-alt p-4">
+              <div className="text-token-text-secondary text-xs">
+                {localize('com_nav_admin_recent_signups')}
+              </div>
+              <div className="text-2xl font-semibold text-text-primary">
+                {stats.recentSignups.toLocaleString()}
+              </div>
+            </div>
           </div>
-          <div className="rounded-lg border border-border-subtle bg-surface-primary-alt p-4">
-            <div className="text-token-text-secondary text-xs">{localize('com_nav_admin_recent_signups')}</div>
-            <div className="text-2xl font-semibold text-text-primary">{stats.recentSignups.toLocaleString()}</div>
-          </div>
-        </div>
         )}
         <Button
           type="button"
@@ -243,7 +333,7 @@ const AdminPanel: React.FC = () => {
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder={localize('com_ui_search')}
-            className="flex-1 min-w-0"
+            className="min-w-0 flex-1"
             aria-label={localize('com_ui_search')}
           />
           <Button type="submit" variant="default" size="sm">
@@ -274,7 +364,7 @@ const AdminPanel: React.FC = () => {
       </div>
 
       {isLoading && (
-        <div className="py-4 text-center text-token-text-secondary" role="status">
+        <div className="text-token-text-secondary py-4 text-center" role="status">
           {localize('com_ui_loading')}
         </div>
       )}
@@ -286,17 +376,17 @@ const AdminPanel: React.FC = () => {
       )}
 
       {!isLoading && !isError && users.length === 0 && (
-        <div className="py-4 text-center text-token-text-secondary">
+        <div className="text-token-text-secondary py-4 text-center">
           {localize('com_nav_admin_no_users')}
         </div>
       )}
 
       {!isLoading && !isError && users.length > 0 && (
         <>
-          <div className="overflow-x-auto rounded-md border border-border-subtle">
+          <div className="border-border-subtle overflow-x-auto rounded-md border">
             <table className="w-full text-left text-sm" role="table">
               <thead>
-                <tr className="border-b border-border-subtle bg-surface-secondary">
+                <tr className="border-border-subtle border-b bg-surface-secondary">
                   <th className="p-2 font-medium">
                     <button
                       type="button"
@@ -400,7 +490,7 @@ const AdminPanel: React.FC = () => {
                 {users.map((user) => (
                   <tr
                     key={user._id}
-                    className="border-b border-border-subtle last:border-b-0 hover:bg-surface-secondary/50"
+                    className="border-border-subtle hover:bg-surface-secondary/50 border-b last:border-b-0"
                   >
                     <td className="p-2">
                       <button
@@ -411,7 +501,7 @@ const AdminPanel: React.FC = () => {
                           setUserDetailTab('conversations');
                           setIsUserDetailFullscreen(false);
                         }}
-                        className="text-left font-medium text-token-text-primary hover:underline"
+                        className="text-token-text-primary text-left font-medium hover:underline"
                         aria-label={localize('com_nav_admin_view_user')}
                       >
                         {user.email ?? '—'}
@@ -421,7 +511,7 @@ const AdminPanel: React.FC = () => {
                     <td className="p-2">{user.role ?? '—'}</td>
                     <td className="p-2 font-medium">{user.tokenCredits.toLocaleString()}</td>
                     <td className="p-2">{user.conversationCount ?? 0}</td>
-                    <td className="p-2 text-token-text-secondary">{formatDate(user.createdAt)}</td>
+                    <td className="text-token-text-secondary p-2">{formatDate(user.createdAt)}</td>
                     <td className="p-2">
                       {user.isBanned && (
                         <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
@@ -457,7 +547,9 @@ const AdminPanel: React.FC = () => {
                             min={1}
                             placeholder="+"
                             value={addAmount[user._id] ?? ''}
-                            onChange={(e) => setAddAmount((prev) => ({ ...prev, [user._id]: e.target.value }))}
+                            onChange={(e) =>
+                              setAddAmount((prev) => ({ ...prev, [user._id]: e.target.value }))
+                            }
                             className="w-20"
                             aria-label={localize('com_nav_admin_add_credits')}
                           />
@@ -521,15 +613,16 @@ const AdminPanel: React.FC = () => {
             className={`flex w-full flex-col bg-background shadow-xl ${isUserDetailFullscreen ? '' : 'max-w-3xl sm:w-[32rem]'}`}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex shrink-0 flex-col gap-2 border-b border-border-subtle px-4 py-3">
+            <div className="border-border-subtle flex shrink-0 flex-col gap-2 border-b px-4 py-3">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-medium text-text-primary">
                     {selectedUser.name ?? selectedUser.username ?? selectedUser.email ?? '—'}
                   </h3>
-                  <p className="text-xs text-token-text-secondary">{selectedUser.email}</p>
-                  <p className="mt-1 text-xs text-token-text-secondary">
-                    {localize('com_nav_balance')}: {selectedUser.tokenCredits.toLocaleString()} · {localize('com_nav_admin_role')}: {selectedUser.role ?? '—'}
+                  <p className="text-token-text-secondary text-xs">{selectedUser.email}</p>
+                  <p className="text-token-text-secondary mt-1 text-xs">
+                    {localize('com_nav_balance')}: {selectedUser.tokenCredits.toLocaleString()} ·{' '}
+                    {localize('com_nav_admin_role')}: {selectedUser.role ?? '—'}
                   </p>
                 </div>
                 <div className="flex items-center gap-1">
@@ -537,9 +630,17 @@ const AdminPanel: React.FC = () => {
                     type="button"
                     onClick={() => setIsUserDetailFullscreen((prev) => !prev)}
                     className="rounded p-1 hover:bg-surface-secondary"
-                    aria-label={isUserDetailFullscreen ? localize('com_ui_collapse') : localize('com_ui_expand')}
+                    aria-label={
+                      isUserDetailFullscreen
+                        ? localize('com_ui_collapse')
+                        : localize('com_ui_expand')
+                    }
                   >
-                    {isUserDetailFullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+                    {isUserDetailFullscreen ? (
+                      <Minimize2 className="h-5 w-5" />
+                    ) : (
+                      <Maximize2 className="h-5 w-5" />
+                    )}
                   </button>
                   <button
                     type="button"
@@ -576,7 +677,9 @@ const AdminPanel: React.FC = () => {
                   min={1}
                   placeholder="+"
                   value={addAmount[selectedUser._id] ?? ''}
-                  onChange={(e) => setAddAmount((prev) => ({ ...prev, [selectedUser._id]: e.target.value }))}
+                  onChange={(e) =>
+                    setAddAmount((prev) => ({ ...prev, [selectedUser._id]: e.target.value }))
+                  }
                   className="w-20"
                 />
                 <Button
@@ -589,19 +692,126 @@ const AdminPanel: React.FC = () => {
                   {localize('com_nav_admin_add_credits')}
                 </Button>
               </div>
+              {transactionsQuery.isLoading && (
+                <div className="border-border-subtle text-token-text-secondary rounded-md border bg-surface-primary-alt p-3 text-xs">
+                  {localize('com_ui_loading')}
+                </div>
+              )}
+              {usageSummary && (
+                <div className="border-border-subtle grid grid-cols-2 gap-2 rounded-md border bg-surface-primary-alt p-3 sm:grid-cols-3">
+                  <div className="col-span-2 text-xs font-medium text-text-primary sm:col-span-3">
+                    {localize('com_nav_admin_usage_summary')}
+                    <span className="text-token-text-secondary ml-2 font-normal">
+                      {localize('com_nav_admin_usage_period', {
+                        days: String(usageSummary.periodDays ?? 40),
+                      } as Record<string, unknown>)}
+                    </span>
+                  </div>
+                  <div>
+                    <div className="text-token-text-secondary text-xs">
+                      {localize('com_nav_admin_usage_credits')}
+                    </div>
+                    <div className="font-semibold text-text-primary">
+                      {formatCredits(usageSummary.usageCredits)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-token-text-secondary text-xs">
+                      {localize('com_nav_admin_usage_cost')}
+                    </div>
+                    <div className="font-semibold text-text-primary">
+                      {formatUsd(usageSummary.usageUsd)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-token-text-secondary text-xs">
+                      {localize('com_nav_admin_usage_input')}
+                    </div>
+                    <div className="font-semibold text-text-primary">
+                      {formatUsd(usageSummary.inputUsd)}
+                    </div>
+                    <div className="text-token-text-secondary text-xs">
+                      {localize('com_nav_admin_usage_credits_and_tokens', {
+                        credits: formatCredits(usageSummary.inputCredits),
+                        tokens: formatCredits(usageSummary.inputTokens),
+                      } as Record<string, unknown>)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-token-text-secondary text-xs">
+                      {localize('com_nav_admin_usage_output')}
+                    </div>
+                    <div className="font-semibold text-text-primary">
+                      {formatUsd(usageSummary.outputUsd)}
+                    </div>
+                    <div className="text-token-text-secondary text-xs">
+                      {localize('com_nav_admin_usage_credits_and_tokens', {
+                        credits: formatCredits(usageSummary.outputCredits),
+                        tokens: formatCredits(usageSummary.outputTokens),
+                      } as Record<string, unknown>)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-token-text-secondary text-xs">
+                      {localize('com_nav_admin_usage_added')}
+                    </div>
+                    <div className="font-semibold text-text-primary">
+                      {formatCredits(usageSummary.addedCredits)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-token-text-secondary text-xs">
+                      {localize('com_nav_admin_usage_net')}
+                    </div>
+                    <div className="font-semibold text-text-primary">
+                      {formatCredits(usageSummary.netCredits)}
+                    </div>
+                  </div>
+                  {(usageSummary.modelBreakdown?.length ?? 0) > 0 && (
+                    <div className="col-span-2 sm:col-span-3">
+                      <div className="text-token-text-secondary text-xs">
+                        {localize('com_nav_admin_usage_by_model')}
+                      </div>
+                      <div className="mt-2 flex flex-col gap-2">
+                        {usageSummary.modelBreakdown?.map((modelUsage) => (
+                          <div
+                            key={modelUsage.model ?? 'unknown'}
+                            className="border-border-subtle rounded border bg-surface-primary px-2 py-1.5"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate font-medium text-text-primary">
+                                {modelUsage.model ?? localize('com_nav_admin_unknown_model')}
+                              </span>
+                              <span className="shrink-0 font-semibold text-text-primary">
+                                {formatUsd(modelUsage.usageUsd)}
+                              </span>
+                            </div>
+                            <div className="text-token-text-secondary mt-1 text-xs">
+                              {localize('com_nav_admin_usage_model_io', {
+                                input: formatUsd(modelUsage.inputUsd),
+                                output: formatUsd(modelUsage.outputUsd),
+                              } as Record<string, unknown>)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="flex border-b border-border-subtle">
+            <div className="border-border-subtle flex border-b">
               <button
                 type="button"
                 onClick={() => setUserDetailTab('conversations')}
-                className={`px-4 py-2 text-sm font-medium ${userDetailTab === 'conversations' ? 'border-b-2 border-token-text-primary text-text-primary' : 'text-token-text-secondary'}`}
+                className={`px-4 py-2 text-sm font-medium ${userDetailTab === 'conversations' ? 'border-token-text-primary border-b-2 text-text-primary' : 'text-token-text-secondary'}`}
               >
                 {localize('com_nav_admin_tab_conversations')}
               </button>
               <button
                 type="button"
                 onClick={() => setUserDetailTab('credits')}
-                className={`px-4 py-2 text-sm font-medium ${userDetailTab === 'credits' ? 'border-b-2 border-token-text-primary text-text-primary' : 'text-token-text-secondary'}`}
+                className={`px-4 py-2 text-sm font-medium ${userDetailTab === 'credits' ? 'border-token-text-primary border-b-2 text-text-primary' : 'text-token-text-secondary'}`}
               >
                 {localize('com_nav_admin_tab_credits')}
               </button>
@@ -609,12 +819,14 @@ const AdminPanel: React.FC = () => {
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
               {userDetailTab === 'conversations' && (
                 <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 overflow-auto md:grid-cols-2">
-                  <div className="flex flex-col overflow-auto border-r border-border-subtle">
+                  <div className="border-border-subtle flex flex-col overflow-auto border-r">
                     {convosQuery.isLoading && (
-                      <div className="p-4 text-token-text-secondary">{localize('com_ui_loading')}</div>
+                      <div className="text-token-text-secondary p-4">
+                        {localize('com_ui_loading')}
+                      </div>
                     )}
                     {!convosQuery.isLoading && conversations.length === 0 && (
-                      <div className="p-4 text-token-text-secondary">
+                      <div className="text-token-text-secondary p-4">
                         {localize('com_nav_admin_no_conversations')}
                       </div>
                     )}
@@ -624,14 +836,18 @@ const AdminPanel: React.FC = () => {
                           key={convo.conversationId}
                           type="button"
                           onClick={() => setSelectedConversationId(convo.conversationId)}
-                          className={`border-b border-border-subtle px-4 py-2 text-left last:border-b-0 hover:bg-surface-secondary ${
-                            selectedConversationId === convo.conversationId ? 'bg-surface-secondary' : ''
+                          className={`border-border-subtle border-b px-4 py-2 text-left last:border-b-0 hover:bg-surface-secondary ${
+                            selectedConversationId === convo.conversationId
+                              ? 'bg-surface-secondary'
+                              : ''
                           }`}
                         >
                           <div className="truncate font-medium text-text-primary">
                             {convo.title || convo.conversationId || '—'}
                           </div>
-                          <div className="text-xs text-token-text-secondary">{formatDate(convo.updatedAt)}</div>
+                          <div className="text-token-text-secondary text-xs">
+                            {formatDate(convo.updatedAt)}
+                          </div>
                         </button>
                       ))}
                   </div>
@@ -643,41 +859,40 @@ const AdminPanel: React.FC = () => {
                       </h4>
                     </div>
                     {!selectedConversationId && (
-                      <div className="p-4 text-token-text-secondary">
+                      <div className="text-token-text-secondary p-4">
                         {localize('com_nav_admin_select_conversation')}
                       </div>
                     )}
                     {selectedConversationId && messagesQuery.isLoading && (
-                      <div className="p-4 text-token-text-secondary">{localize('com_ui_loading')}</div>
-                    )}
-                    {selectedConversationId && !messagesQuery.isLoading && messages.length === 0 && (
-                      <div className="p-4 text-token-text-secondary">
-                        {localize('com_nav_admin_no_messages')}
+                      <div className="text-token-text-secondary p-4">
+                        {localize('com_ui_loading')}
                       </div>
                     )}
+                    {selectedConversationId &&
+                      !messagesQuery.isLoading &&
+                      messages.length === 0 && (
+                        <div className="text-token-text-secondary p-4">
+                          {localize('com_nav_admin_no_messages')}
+                        </div>
+                      )}
                     {selectedConversationId &&
                       !messagesQuery.isLoading &&
                       messages.map((msg: TMessage) => (
                         <div
                           key={msg.messageId}
-                          className="border-b border-border-subtle px-4 py-2 last:border-b-0"
+                          className="border-border-subtle border-b px-4 py-2 last:border-b-0"
                         >
-                          <div className="flex items-center gap-2 text-xs text-token-text-secondary">
+                          <div className="text-token-text-secondary flex items-center gap-2 text-xs">
                             <span>
-                              {msg.isCreatedByUser ? localize('com_ui_you') : msg.sender ?? 'Assistant'}
+                              {msg.isCreatedByUser
+                                ? localize('com_ui_you')
+                                : (msg.sender ?? 'Assistant')}
                             </span>
                             <span>{formatDate(msg.createdAt)}</span>
                             {msg.model && <span>{msg.model}</span>}
                           </div>
                           <div className="mt-1 break-words text-text-primary">
-                            {typeof msg.text === 'string'
-                              ? msg.text
-                              : Array.isArray(msg.text)
-                                ? (msg.text as Array<{ type?: string; text?: string }>)
-                                    .filter((t) => t?.type === 'text')
-                                    .map((t) => t?.text)
-                                    .join(' ')
-                                : '—'}
+                            {getMessageText(msg as AdminMessage)}
                           </div>
                         </div>
                       ))}
@@ -700,28 +915,37 @@ const AdminPanel: React.FC = () => {
                   {!transactionsQuery.isLoading && transactions.length > 0 && (
                     <div className="flex flex-col gap-1">
                       {transactions.map((tx: TBalanceTransactionItem) => {
-                        const amount = tx.rawAmount ?? tx.tokenValue ?? 0;
+                        const amount = getTransactionCreditAmount(tx);
                         const isCredit = amount > 0;
                         return (
                           <div
                             key={tx._id}
-                            className="flex items-center justify-between border-b border-border-subtle py-2 text-sm last:border-b-0"
+                            className="border-border-subtle flex items-center justify-between border-b py-2 text-sm last:border-b-0"
                           >
                             <div className="flex flex-col gap-0.5">
                               <span className="font-medium text-text-primary">
-                                {getContextLabel(tx.context, (key) => localize(key as Parameters<typeof localize>[0]))}
+                                {getContextLabel(tx.context, (key) =>
+                                  localize(key as Parameters<typeof localize>[0]),
+                                )}
                               </span>
                               <span className="text-token-text-secondary text-xs">
+                                {getTokenTypeLabel(tx.tokenType, localize)}
+                                {' - '}
                                 {formatDate(tx.createdAt)}
-                                {tx.model ? ` · ${tx.model}` : ''}
+                                {tx.model ? ` - ${tx.model}` : ''}
                               </span>
                             </div>
-                            <span
-                              className={`shrink-0 font-medium ${isCredit ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
-                            >
-                              {isCredit ? '+' : ''}
-                              {Math.abs(amount).toLocaleString()}
-                            </span>
+                            <div className="shrink-0 text-right">
+                              <div
+                                className={`font-medium ${isCredit ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}
+                              >
+                                {isCredit ? '+' : ''}
+                                {formatCredits(Math.abs(amount))}
+                              </div>
+                              <div className="text-token-text-secondary text-xs">
+                                {formatUsd(Math.abs(amount) * usdPerCredit)}
+                              </div>
+                            </div>
                           </div>
                         );
                       })}
