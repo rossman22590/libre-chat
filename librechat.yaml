@@ -372,11 +372,11 @@ registration:
 
 balance:
   enabled: true
-  startBalance: 2500000
+  startBalance: 800000
   autoRefillEnabled: true
   refillIntervalValue: 6
   refillIntervalUnit: 'hours'
-  refillAmount: 2500000
+  refillAmount: 800000
 
 speech:
   tts:
@@ -586,7 +586,6 @@ endpoints:
       - "context"
       - "skills"
       - "tools"
-      - "chain"
       - "ocr"
   assistants:
     disableBuilder: true
