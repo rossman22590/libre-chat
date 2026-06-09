@@ -949,6 +949,26 @@ endpoints:
       forcePrompt: false
       modelDisplayLabel: "Grok"
 
+
+    - name: "MiniMax AI"
+      # The base URL should target the direct chat completions path
+      baseURL: "https://minimax.io" 
+      apiKey: "${MINIMAX_API_KEY}"
+      # Icon name or path (optional)
+      iconURL: "https://minimax.io" 
+      models:
+        default: ["MiniMax-M3"]
+        fetch: false # Set to false to strictly use the manual list below
+        list:
+          - name: "MiniMax-M3"
+          - name: "MiniMax-M2.7"
+          - name: "MiniMax-M2.7-highspeed"
+          - name: "MiniMax-M2.5"
+          - name: "MiniMax-M2.5-highspeed"
+      titleConvo: true
+      titleModel: "MiniMax-M2.7-highspeed"
+      summarize: false
+
 # Memory configuration for user memories
 # memory:
 #   # (optional) Disable memory functionality
