@@ -958,7 +958,7 @@ endpoints:
       iconURL: "https://pixiomedia.nyc3.digitaloceanspaces.com/uploads/1780968037924-minimax-color.svg" 
       models:
         default: ["MiniMax-M3"]
-        fetch: false # Set to false to strictly use the manual list below
+        fetch: true # Set to false to strictly use the manual list below
         list:
           - name: "MiniMax-M3"
           - name: "MiniMax-M2.7"
