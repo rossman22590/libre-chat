@@ -952,10 +952,10 @@ endpoints:
 
     - name: "MiniMax AI"
       # The base URL should target the direct chat completions path
-      baseURL: "https://minimax.io" 
+      baseURL: "https://api.minimax.io/v1" 
       apiKey: "${MINIMAX_API_KEY}"
       # Icon name or path (optional)
-      iconURL: "https://minimax.io" 
+      iconURL: "https://pixiomedia.nyc3.digitaloceanspaces.com/uploads/1780968037924-minimax-color.svg" 
       models:
         default: ["MiniMax-M3"]
         fetch: false # Set to false to strictly use the manual list below
