@@ -967,6 +967,7 @@ endpoints:
           - name: "MiniMax-M2.5-highspeed"
       titleConvo: true
       titleModel: "MiniMax-M2.7-highspeed"
+      modelDisplayLabel: "Minimax"
       summarize: false
 
 # Memory configuration for user memories
