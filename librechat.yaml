@@ -581,10 +581,10 @@ endpoints:
       - "file_search"
       - "web_search"
       - "artifacts"
-      # - "subagents"
+      - "subagents"
       - "actions"
       - "context"
-      # - "skills"
+      - "skills"
       - "tools"
       - "ocr"
   assistants:
