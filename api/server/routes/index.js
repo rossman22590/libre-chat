@@ -27,10 +27,12 @@ const auth = require('./auth');
 const keys = require('./keys');
 const user = require('./user');
 const mcp = require('./mcp');
+const sso = require('./sso');
 
 module.exports = {
   mcp,
   auth,
+  sso,
   adminAuth,
   adminUsers,
   keys,

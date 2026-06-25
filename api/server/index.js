@@ -135,6 +135,7 @@ const startServer = async () => {
 
   app.use('/oauth', routes.oauth);
   /* API Endpoints */
+  app.use('/api/auth/sso', routes.sso);
   app.use('/api/auth', routes.auth);
   app.use('/api/admin', routes.adminAuth);
   app.use('/api/admin', routes.adminUsers);
