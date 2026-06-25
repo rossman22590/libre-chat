@@ -6,7 +6,7 @@ const { logger } = require('@librechat/data-schemas');
 
 const router = express.Router();
 
-router.get('/sso', async (req, res) => {
+router.get('/', async (req, res) => {
   const { token } = req.query;
   if (!token) {
     logger.warn('[SSO] SSO request missing token');
