@@ -1111,6 +1111,38 @@ describe('importChatBotUiConvo', () => {
   });
 });
 
+describe('importLibreChatConvos', () => {
+  it('should import every conversation from a LibreChat bulk export', async () => {
+    mockGetEndpointsConfig.mockResolvedValue({
+      [EModelEndpoint.azureOpenAI]: {},
+    });
+
+    const linearConvo = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '__data__', 'librechat-linear.json'), 'utf8'),
+    );
+    const jsonData = [
+      linearConvo,
+      { ...linearConvo, conversationId: 'second-convo-id', title: 'Second Conversation' },
+    ];
+
+    const requestUserId = 'user-123';
+    const importBatchBuilder = new ImportBatchBuilder(requestUserId);
+    jest.spyOn(importBatchBuilder, 'saveMessage');
+    jest.spyOn(importBatchBuilder, 'finishConversation');
+    jest.spyOn(importBatchBuilder, 'saveBatch');
+
+    const importer = getImporter(jsonData);
+    await importer(jsonData, requestUserId, () => importBatchBuilder);
+
+    expect(importBatchBuilder.finishConversation).toHaveBeenCalledTimes(2);
+    expect(importBatchBuilder.saveMessage).toHaveBeenCalledTimes(linearConvo.messages.length * 2);
+    expect(importBatchBuilder.saveBatch).toHaveBeenCalledTimes(2);
+
+    const titles = importBatchBuilder.finishConversation.mock.calls.map((call) => call[0]);
+    expect(titles).toEqual([linearConvo.title, 'Second Conversation']);
+  });
+});
+
 describe('getImporter', () => {
   it('should throw an error if the import type is not supported', () => {
     const jsonData = { unsupported: 'data' };

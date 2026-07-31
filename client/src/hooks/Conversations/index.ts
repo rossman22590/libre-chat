@@ -1,4 +1,5 @@
 export { default as usePresets } from './usePresets';
+export { default as useExportJson } from './useExportJson';
 export { default as useGetSender } from './useGetSender';
 export { default as useDefaultConvo } from './useDefaultConvo';
 export { default as useSearchEnabled } from './useSearchEnabled';

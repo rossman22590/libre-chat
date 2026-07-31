@@ -182,6 +182,11 @@ export const deleteAllConversation = () => `${conversationsRoot}/all`;
 
 export const importConversation = () => `${conversationsRoot}/import`;
 
+export const exportConversations = () => `${conversationsRoot}/export`;
+
+export const exportConversation = (conversationId: string) =>
+  `${conversationsRoot}/export/${encodeURIComponent(conversationId)}`;
+
 export const forkConversation = () => `${conversationsRoot}/fork`;
 
 export const duplicateConversation = () => `${conversationsRoot}/duplicate`;

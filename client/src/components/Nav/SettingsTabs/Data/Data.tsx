@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useOnClickOutside } from '@librechat/client';
 import { Permissions, PermissionTypes } from 'librechat-data-provider';
+import ExportConversations from './ExportConversations';
 import ImportConversations from './ImportConversations';
 import { AgentApiKeys } from './AgentApiKeys';
 import { DeleteCache } from './DeleteCache';
@@ -22,6 +23,9 @@ function Data() {
     <div className="flex flex-col gap-3 p-1 text-sm text-text-primary">
       <div className="pb-3">
         <ImportConversations />
+      </div>
+      <div className="pb-3">
+        <ExportConversations />
       </div>
       <div className="pb-3">
         <SharedLinks />

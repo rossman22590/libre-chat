@@ -531,6 +531,20 @@ export type TImportResponse = {
   message: string;
 };
 
+/**
+ * A conversation serialized in the LibreChat import format, as returned by the export endpoints.
+ */
+export type TConversationExport = {
+  conversationId: string;
+  endpoint: string | null;
+  title: string;
+  exportAt: string;
+  branches: boolean;
+  recursive: boolean;
+  options: Partial<TConversation>;
+  messages: Partial<TMessage>[];
+};
+
 /** Prompts */
 
 export type TPrompt = {

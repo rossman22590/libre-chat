@@ -2,6 +2,8 @@ export * from './app';
 /* Admin */
 export * from './admin';
 export * from './cdn';
+/* Conversations */
+export * from './conversations';
 /* Auth */
 export * from './auth';
 /* API Keys */

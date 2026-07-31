@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { QueryKeys } from 'librechat-data-provider';
 import { useQueryClient } from '@tanstack/react-query';
 import { DropdownPopup, Spinner, useToastContext } from '@librechat/client';
-import { Ellipsis, Share2, CopyPlus, Archive, Pen, Trash } from 'lucide-react';
+import { Ellipsis, Share2, Upload, CopyPlus, Archive, Pen, Trash } from 'lucide-react';
 import type { MouseEvent } from 'react';
 import type { TMessage } from 'librechat-data-provider';
 import {
@@ -13,7 +13,7 @@ import {
   useGetStartupConfig,
   useArchiveConvoMutation,
 } from '~/data-provider';
-import { useLocalize, useNavigateToConvo, useNewConvo } from '~/hooks';
+import { useLocalize, useNavigateToConvo, useNewConvo, useExportJson } from '~/hooks';
 import { NotificationSeverity } from '~/common';
 import { useChatContext } from '~/Providers';
 import DeleteButton from './DeleteButton';
@@ -58,6 +58,7 @@ function ConvoOptions({
   const [announcement, setAnnouncement] = useState('');
 
   const archiveConvoMutation = useArchiveConvoMutation();
+  const { isExporting, exportConversationJson } = useExportJson();
 
   const deleteMutation = useDeleteConversationMutation({
     onSuccess: () => {
@@ -177,6 +178,11 @@ function ConvoOptions({
     ],
   );
 
+  const handleExportClick = useCallback(async () => {
+    await exportConversationJson(conversationId ?? '', title);
+    setIsPopoverActive(false);
+  }, [conversationId, title, exportConversationJson, setIsPopoverActive]);
+
   const handleDuplicateClick = useCallback(() => {
     duplicateConversation.mutate({
       conversationId: conversationId ?? '',
@@ -196,6 +202,16 @@ function ConvoOptions({
         hideOnClick: false,
         ref: shareButtonRef,
         render: (props) => <button {...props} />,
+      },
+      {
+        label: localize('com_ui_export_json'),
+        onClick: handleExportClick,
+        hideOnClick: false,
+        icon: isExporting ? (
+          <Spinner className="size-4" />
+        ) : (
+          <Upload className="icon-sm mr-2 text-text-primary" aria-hidden="true" />
+        ),
       },
       {
         label: localize('com_ui_rename'),
@@ -236,11 +252,13 @@ function ConvoOptions({
     ],
     [
       localize,
+      isExporting,
       shareHandler,
       startupConfig,
       renameHandler,
       deleteHandler,
       isArchiveLoading,
+      handleExportClick,
       isDuplicateLoading,
       handleArchiveClick,
       handleDuplicateClick,

@@ -739,6 +739,20 @@ export const importConversationsFile = (data: FormData): Promise<t.TImportRespon
   return request.postMultiPart(endpoints.importConversation(), data);
 };
 
+/**
+ * Exports every conversation of the current user in the LibreChat import format.
+ */
+export const exportAllConversations = (): Promise<t.TConversationExport[]> => {
+  return request.get(endpoints.exportConversations());
+};
+
+/**
+ * Exports a single conversation in the LibreChat import format.
+ */
+export const exportConversationById = (conversationId: string): Promise<t.TConversationExport> => {
+  return request.get(endpoints.exportConversation(conversationId));
+};
+
 export const uploadAvatar = (data: FormData): Promise<f.AvatarUploadResponse> => {
   return request.postMultiPart(endpoints.avatar(), data);
 };

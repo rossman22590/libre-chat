@@ -47,6 +47,7 @@ export interface ConversationMethods {
     convoMap: Record<string, unknown>;
   }>;
   getConvo(user: string, conversationId: string): Promise<IConversation | null>;
+  getConvosForExport(user: string): Promise<IConversation[]>;
   getConvoTitle(user: string, conversationId: string): Promise<string | null>;
   deleteConvos(
     user: string,
@@ -91,6 +92,25 @@ export function createConversationMethods(
     } catch (error) {
       logger.error('[getConvo] Error getting single conversation', error);
       throw new Error('Error getting single conversation');
+    }
+  }
+
+  /**
+   * Retrieves every non-expired conversation owned by the user, newest first.
+   * Unlike `getConvosByCursor`, all fields are returned so the result can be exported verbatim.
+   */
+  async function getConvosForExport(user: string) {
+    try {
+      const Conversation = mongoose.models.Conversation as Model<IConversation>;
+      return await Conversation.find({
+        user,
+        $or: [{ expiredAt: null }, { expiredAt: { $exists: false } }],
+      } as FilterQuery<IConversation>)
+        .sort({ updatedAt: -1 })
+        .lean<IConversation[]>();
+    } catch (error) {
+      logger.error('[getConvosForExport] Error getting conversations', error);
+      throw new Error('Error getting conversations');
     }
   }
 
@@ -516,6 +536,7 @@ export function createConversationMethods(
     getConvosByCursor,
     getConvosQueried,
     getConvo,
+    getConvosForExport,
     getConvoTitle,
     deleteConvos,
   };

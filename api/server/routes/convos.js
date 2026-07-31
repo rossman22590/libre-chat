@@ -5,6 +5,7 @@ const {
   isEnabled,
   resolveImportMaxFileSize,
   restoreTenantContextFromReq,
+  createConversationExportService,
 } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 const { CacheKeys, EModelEndpoint } = require('librechat-data-provider');
@@ -28,6 +29,12 @@ const assistantClients = {
 
 const router = express.Router();
 router.use(requireJwtAuth);
+
+const conversationExportService = createConversationExportService({
+  getConvo: db.getConvo,
+  getConvosForExport: db.getConvosForExport,
+  getMessages: db.getMessages,
+});
 
 router.get('/', async (req, res) => {
   const limit = parseInt(req.query.limit, 10) || 25;
@@ -56,6 +63,43 @@ router.get('/', async (req, res) => {
   } catch (error) {
     logger.error('Error fetching conversations', error);
     res.status(500).json({ error: 'Error fetching conversations' });
+  }
+});
+
+/**
+ * Exports every conversation of the requesting user as re-importable LibreChat JSON.
+ * @route GET /export
+ * @returns {ExportedConversation[]} 200 - success response - application/json
+ */
+router.get('/export', async (req, res) => {
+  try {
+    const conversations = await conversationExportService.exportAllConversations(req.user.id);
+    res.status(200).json(conversations);
+  } catch (error) {
+    logger.error('Error exporting conversations', error);
+    res.status(500).json({ error: 'Error exporting conversations' });
+  }
+});
+
+/**
+ * Exports a single conversation as re-importable LibreChat JSON.
+ * @route GET /export/:conversationId
+ * @returns {ExportedConversation} 200 - success response - application/json
+ */
+router.get('/export/:conversationId', async (req, res) => {
+  const { conversationId } = req.params;
+  try {
+    const conversation = await conversationExportService.exportConversation(
+      req.user.id,
+      conversationId,
+    );
+    if (!conversation) {
+      return res.status(404).json({ error: 'Conversation not found' });
+    }
+    res.status(200).json(conversation);
+  } catch (error) {
+    logger.error('Error exporting conversation', error);
+    res.status(500).json({ error: 'Error exporting conversation' });
   }
 });
 

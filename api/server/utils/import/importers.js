@@ -14,12 +14,21 @@ const { cloneMessagesWithTimestamps } = require('./fork');
  * @throws {Error} - If the import type is not supported.
  */
 function getImporter(jsonData) {
-  // For array-based formats (ChatGPT or Claude)
+  // For array-based formats (LibreChat bulk, ChatGPT or Claude)
   if (Array.isArray(jsonData)) {
     // Claude format has chat_messages array in each conversation
     if (jsonData.length > 0 && jsonData[0]?.chat_messages) {
       logger.info('Importing Claude conversation');
       return importClaudeConvo;
+    }
+    // LibreChat bulk export is an array of LibreChat conversations
+    if (
+      jsonData.length > 0 &&
+      jsonData[0]?.conversationId &&
+      (jsonData[0].messagesTree || jsonData[0].messages)
+    ) {
+      logger.info('Importing LibreChat conversations');
+      return importLibreChatConvos;
     }
     // ChatGPT format has mapping object in each conversation
     logger.info('Importing ChatGPT conversation');
@@ -306,6 +315,26 @@ async function importLibreChatConvo(
   } catch (error) {
     logger.error(`user: ${requestUserId} | Error creating conversation from LibreChat file`, error);
   }
+}
+
+/**
+ * Imports a LibreChat bulk export (an array of LibreChat conversations) from JSON.
+ *
+ * @param {Object[]} jsonData - The array of LibreChat conversations.
+ * @param {string} requestUserId - The ID of the user making the import request.
+ * @param {Function} [builderFactory=createImportBatchBuilder] - The factory function to create an import batch builder.
+ * @returns {Promise<void>} - A promise that resolves when the import is complete.
+ */
+async function importLibreChatConvos(
+  jsonData,
+  requestUserId,
+  builderFactory = createImportBatchBuilder,
+  userRole,
+) {
+  for (const conversation of jsonData) {
+    await importLibreChatConvo(conversation, requestUserId, builderFactory, userRole);
+  }
+  logger.info(`user: ${requestUserId} | ${jsonData.length} LibreChat conversation(s) imported`);
 }
 
 /**
