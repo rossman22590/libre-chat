@@ -36,6 +36,14 @@ export interface ConversationExportDeps {
   getMessages: (filter: FilterQuery<IMessage>) => Promise<IMessage[]>;
 }
 
+export interface ConversationExportService {
+  exportConversation: (
+    user: string,
+    conversationId: string,
+  ) => Promise<ExportedConversation | null>;
+  exportAllConversations: (user: string) => Promise<ExportedConversation[]>;
+}
+
 const omitFields = <T extends object>(source: T, fields: readonly string[]): Partial<T> => {
   const omitted = new Set<string>(fields);
   const result: Record<string, unknown> = {};
@@ -63,7 +71,9 @@ const toExportedConversation = (
   messages: messages.map((message) => omitFields(message, OMITTED_MESSAGE_FIELDS)),
 });
 
-export function createConversationExportService(deps: ConversationExportDeps) {
+export function createConversationExportService(
+  deps: ConversationExportDeps,
+): ConversationExportService {
   const { getConvo, getConvosForExport, getMessages } = deps;
 
   /** Exports a single conversation in the LibreChat import format */
