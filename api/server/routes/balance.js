@@ -3,8 +3,8 @@ const { createSetBalanceConfig } = require('@librechat/api');
 const router = express.Router();
 const balanceController = require('../controllers/Balance');
 const { requireJwtAuth } = require('../middleware/');
-const { getAppConfig } = require('~/server/services/Config');
 const { findBalanceByUser, upsertBalanceFields } = require('~/models');
+const { getAppConfig } = require('~/server/services/Config');
 
 const setBalanceConfig = createSetBalanceConfig({
   getAppConfig,
@@ -13,10 +13,6 @@ const setBalanceConfig = createSetBalanceConfig({
 });
 
 router.get('/', requireJwtAuth, setBalanceConfig, balanceController);
-router.get(
-  '/transactions',
-  requireJwtAuth,
-  balanceController.balanceTransactionsController,
-);
+router.get('/transactions', requireJwtAuth, balanceController.balanceTransactionsController);
 
 module.exports = router;
