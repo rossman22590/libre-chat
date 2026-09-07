@@ -1,8 +1,8 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { SystemRoles } from 'librechat-data-provider';
-import { useAuthContext, useLocalize } from '~/hooks';
 import AdminPanel from '~/components/Nav/SettingsTabs/AdminPanel/AdminPanel';
+import { useAuthContext, useLocalize } from '~/hooks';
 
 export default function AdminPanelPage() {
   const { user } = useAuthContext();
@@ -13,8 +13,8 @@ export default function AdminPanelPage() {
   }
 
   return (
-    <div className="flex h-full w-full flex-col overflow-auto bg-background">
-      <div className="flex shrink-0 flex-col gap-4 border-b border-border-subtle bg-surface-primary-alt px-4 py-4 sm:px-6">
+    <div className="flex h-full w-full flex-col overflow-auto bg-surface-primary">
+      <div className="border-border-subtle flex shrink-0 flex-col gap-4 border-b bg-surface-primary-alt px-4 py-4 sm:px-6">
         <h1 className="text-lg font-semibold text-text-primary">
           {localize('com_nav_admin_panel')}
         </h1>

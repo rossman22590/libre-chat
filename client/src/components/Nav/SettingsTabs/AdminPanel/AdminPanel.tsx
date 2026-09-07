@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Button, Input, useToastContext } from '@librechat/client';
 import { X, Maximize2, Minimize2, RefreshCw, ChevronUp, ChevronDown } from 'lucide-react';
+import type { TAdminUserItem, TBalanceTransactionItem } from 'librechat-data-provider';
+import type { TMessage } from 'librechat-data-provider';
 import {
   useGetAdminUsers,
   useGetAdminStats,
@@ -12,8 +14,6 @@ import {
   useGetAdminUserTransactions,
 } from '~/data-provider';
 import { useLocalize, type TranslationKeys } from '~/hooks';
-import type { TAdminUserItem, TBalanceTransactionItem } from 'librechat-data-provider';
-import type { TMessage } from 'librechat-data-provider';
 
 const PAGE_SIZE = 20;
 const MESSAGE_PREVIEW_CHARS = 1200;
@@ -516,7 +516,7 @@ const AdminPanel: React.FC = () => {
                 {users.map((user) => (
                   <tr
                     key={user._id}
-                    className="border-border-subtle hover:bg-surface-secondary/50 border-b last:border-b-0"
+                    className="border-border-subtle border-b last:border-b-0 hover:bg-surface-secondary/50"
                   >
                     <td className="p-2">
                       <button
@@ -636,7 +636,7 @@ const AdminPanel: React.FC = () => {
           onClick={(e) => e.target === e.currentTarget && handleCloseUserDetail()}
         >
           <div
-            className={`flex h-full min-h-0 w-full flex-col bg-background shadow-xl ${isUserDetailFullscreen ? '' : 'max-w-3xl sm:w-[32rem]'}`}
+            className={`flex h-full min-h-0 w-full flex-col bg-surface-dialog text-text-primary shadow-xl ${isUserDetailFullscreen ? '' : 'max-w-3xl sm:w-[32rem]'}`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="border-border-subtle flex shrink-0 flex-col gap-2 border-b px-4 py-3">

@@ -1,9 +1,11 @@
 import React from 'react';
 import type { TBalanceTransactionItem } from 'librechat-data-provider';
+import type { LocalizeFunction } from '~/common';
+import type { TranslationKeys } from '~/hooks';
 import { useGetBalanceTransactions } from '~/data-provider';
 import { useLocalize } from '~/hooks';
 
-const CONTEXT_KEYS: Record<string, string> = {
+const CONTEXT_KEYS: Record<string, TranslationKeys> = {
   message: 'com_nav_balance_transaction_context_message',
   title: 'com_nav_balance_transaction_context_title',
   autoRefill: 'com_nav_balance_transaction_context_autoRefill',
@@ -21,7 +23,7 @@ const formatDate = (dateStr?: string): string => {
   });
 };
 
-const getContextLabel = (context: string | undefined, localize: (key: string) => string): string => {
+const getContextLabel = (context: string | undefined, localize: LocalizeFunction): string => {
   if (!context) return '—';
   const key = CONTEXT_KEYS[context];
   return key ? localize(key) : context;
@@ -29,7 +31,7 @@ const getContextLabel = (context: string | undefined, localize: (key: string) =>
 
 const TransactionRow: React.FC<{
   tx: TBalanceTransactionItem;
-  localize: (key: string) => string;
+  localize: LocalizeFunction;
 }> = ({ tx, localize }) => {
   const amount = tx.rawAmount ?? tx.tokenValue ?? 0;
   const isCredit = amount > 0;
@@ -40,7 +42,7 @@ const TransactionRow: React.FC<{
 
   return (
     <div
-      className="flex items-center justify-between border-b border-border-subtle py-2 text-sm last:border-b-0"
+      className="border-border-subtle flex items-center justify-between border-b py-2 text-sm last:border-b-0"
       role="row"
     >
       <div className="flex flex-col gap-0.5">
@@ -67,7 +69,7 @@ const TransactionHistory: React.FC = () => {
 
   if (isLoading) {
     return (
-      <div className="py-4 text-center text-sm text-token-text-secondary" role="status">
+      <div className="text-token-text-secondary py-4 text-center text-sm" role="status">
         {localize('com_nav_balance_transaction_loading')}
       </div>
     );
@@ -85,18 +87,22 @@ const TransactionHistory: React.FC = () => {
 
   if (transactions.length === 0) {
     return (
-      <div className="py-4 text-center text-sm text-token-text-secondary" role="status">
+      <div className="text-token-text-secondary py-4 text-center text-sm" role="status">
         {localize('com_nav_balance_transaction_no_transactions')}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col" role="table" aria-label={localize('com_nav_balance_transaction_history')}>
+    <div
+      className="flex flex-col"
+      role="table"
+      aria-label={localize('com_nav_balance_transaction_history')}
+    >
       <h3 className="mb-2 text-sm font-medium text-text-primary">
         {localize('com_nav_balance_transaction_history')}
       </h3>
-      <div className="max-h-64 overflow-y-auto rounded-md border border-border-subtle p-2">
+      <div className="border-border-subtle max-h-64 overflow-y-auto rounded-md border p-2">
         {transactions.map((tx) => (
           <TransactionRow key={tx._id} tx={tx} localize={localize} />
         ))}
