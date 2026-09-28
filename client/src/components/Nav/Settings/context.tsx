@@ -28,6 +28,7 @@ export function useSettingsContext(): SettingsContextValue {
   });
 
   const balanceEnabled = startupConfig?.balance?.enabled === true;
+  const usageResetsEnabled = balanceEnabled && startupConfig?.balance?.resets?.enabled === true;
   const langfuseConnectionAccess = startupConfig?.langfuseConnectionAccess === true;
   const adminPanelURL = startupConfig?.adminPanelURL ?? '';
   const isLocalProvider = user?.provider === 'local';
@@ -45,6 +46,7 @@ export function useSettingsContext(): SettingsContextValue {
   return useMemo(
     () => ({
       balanceEnabled,
+      usageResetsEnabled,
       hasAnyPersonalizationFeature,
       hasMemoryOptOut,
       hasStatefulCodeSessions,
@@ -62,6 +64,7 @@ export function useSettingsContext(): SettingsContextValue {
     }),
     [
       balanceEnabled,
+      usageResetsEnabled,
       hasAnyPersonalizationFeature,
       hasMemoryOptOut,
       hasStatefulCodeSessions,

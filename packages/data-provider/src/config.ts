@@ -2133,6 +2133,19 @@ export const ocrSchema = z.object({
   strategy: z.nativeEnum(OCRStrategy).default(OCRStrategy.MISTRAL_OCR),
 });
 
+/**
+ * Usage resets: a user may restore their balance to `allotment` up to `perDay` times per rolling
+ * `windowHours` window. `allotment` falls back to `startBalance` when omitted.
+ */
+export const usageResetsSchema = z.object({
+  enabled: z.boolean().optional().default(false),
+  allotment: z.number().nonnegative().optional(),
+  perDay: z.number().int().nonnegative().optional().default(2),
+  windowHours: z.number().positive().optional().default(24),
+});
+
+export type TUsageResetsConfig = z.infer<typeof usageResetsSchema>;
+
 export const balanceSchema = z.object({
   enabled: z.boolean().optional().default(false),
   startBalance: z.number().optional().default(20000),
@@ -2140,6 +2153,7 @@ export const balanceSchema = z.object({
   refillIntervalValue: z.number().optional().default(30),
   refillIntervalUnit: z.enum(REFILL_INTERVAL_UNITS).optional().default('days'),
   refillAmount: z.number().optional().default(10000),
+  resets: usageResetsSchema.optional(),
 });
 
 export const transactionsSchema = z.object({

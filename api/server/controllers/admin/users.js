@@ -97,7 +97,7 @@ async function listUsers(req, res) {
     const userStringIds = users.map((u) => u._id.toString());
     const [balances, conversationCounts] = await Promise.all([
       Balance.find({ user: { $in: userObjectIds } })
-        .select('user tokenCredits')
+        .select('user tokenCredits bonusResets')
         .lean(),
       Conversation.aggregate([
         { $match: { user: { $in: userStringIds } } },
@@ -105,19 +105,23 @@ async function listUsers(req, res) {
       ]),
     ]);
 
-    const balanceByUser = new Map(balances.map((b) => [b.user.toString(), b.tokenCredits ?? 0]));
+    const balanceByUser = new Map(balances.map((b) => [b.user.toString(), b]));
     const convoCountByUser = new Map(conversationCounts.map((c) => [c._id.toString(), c.count]));
 
-    let items = users.map((u) => ({
-      _id: u._id.toString(),
-      email: u.email,
-      name: u.name,
-      username: u.username,
-      role: u.role,
-      createdAt: u.createdAt,
-      tokenCredits: balanceByUser.get(u._id.toString()) ?? 0,
-      conversationCount: convoCountByUser.get(u._id.toString()) ?? 0,
-    }));
+    let items = users.map((u) => {
+      const balance = balanceByUser.get(u._id.toString());
+      return {
+        _id: u._id.toString(),
+        email: u.email,
+        name: u.name,
+        username: u.username,
+        role: u.role,
+        createdAt: u.createdAt,
+        tokenCredits: balance?.tokenCredits ?? 0,
+        bonusResets: balance?.bonusResets ?? 0,
+        conversationCount: convoCountByUser.get(u._id.toString()) ?? 0,
+      };
+    });
 
     if (sortByJoinedField) {
       const mult = sortDirection === 1 ? 1 : -1;

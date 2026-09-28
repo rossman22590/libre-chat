@@ -9,6 +9,7 @@ import {
   useSetAdminUserBalanceMutation,
   useSetAllAdminUsersBalanceMutation,
   useAddAdminUserBalanceMutation,
+  useGrantAdminUserResetsMutation,
   useGetAdminUserConversations,
   useGetAdminUserConversationMessages,
   useGetAdminUserTransactions,
@@ -23,6 +24,7 @@ const CONTEXT_KEYS: Record<string, string> = {
   title: 'com_nav_balance_transaction_context_title',
   autoRefill: 'com_nav_balance_transaction_context_autoRefill',
   admin: 'com_nav_balance_transaction_context_admin',
+  usageReset: 'com_nav_balance_transaction_context_usageReset',
   reasoning: 'com_nav_balance_transaction_context_reasoning',
   incomplete: 'com_nav_balance_transaction_context_incomplete',
 };
@@ -143,6 +145,7 @@ const AdminPanel: React.FC = () => {
   const [userDetailTab, setUserDetailTab] = useState<UserDetailTab>('conversations');
   const [isUserDetailFullscreen, setIsUserDetailFullscreen] = useState(false);
   const [grantAllAmount, setGrantAllAmount] = useState('');
+  const [grantResetsAmount, setGrantResetsAmount] = useState('');
 
   const { data: stats, refetch: refetchStats } = useGetAdminStats();
   const {
@@ -178,6 +181,7 @@ const AdminPanel: React.FC = () => {
   const setBalanceMutation = useSetAdminUserBalanceMutation();
   const setAllBalanceMutation = useSetAllAdminUsersBalanceMutation();
   const addBalanceMutation = useAddAdminUserBalanceMutation();
+  const grantResetsMutation = useGrantAdminUserResetsMutation();
 
   const handleSearchSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -237,6 +241,34 @@ const AdminPanel: React.FC = () => {
     [addAmount, addBalanceMutation, showToast, localize, selectedUser?._id],
   );
 
+  const handleGrantResets = useCallback(
+    (user: TAdminUserItem) => {
+      const amount = parseInt(grantResetsAmount, 10);
+      if (isNaN(amount) || amount === 0) {
+        showToast({ status: 'error', message: localize('com_ui_error') });
+        return;
+      }
+      grantResetsMutation.mutate(
+        { userId: user._id, amount },
+        {
+          onSuccess: ({ bonusResets }, vars) => {
+            showToast({
+              status: 'success',
+              message: localize('com_nav_admin_grant_resets_success', {
+                0: user.name ?? user.username ?? user.email ?? '—',
+                1: bonusResets,
+              }),
+            });
+            setGrantResetsAmount('');
+            setSelectedUser((u) => (u?._id === vars.userId ? { ...u, bonusResets } : u));
+          },
+          onError: () => showToast({ status: 'error', message: localize('com_ui_error') }),
+        },
+      );
+    },
+    [grantResetsAmount, grantResetsMutation, showToast, localize],
+  );
+
   const users = data?.users ?? [];
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -272,6 +304,7 @@ const AdminPanel: React.FC = () => {
 
   const handleCloseUserDetail = useCallback(() => {
     setSelectedUser(null);
+    setGrantResetsAmount('');
     setSelectedConversationId(null);
     setUserDetailTab('conversations');
     setIsUserDetailFullscreen(false);
@@ -648,7 +681,8 @@ const AdminPanel: React.FC = () => {
                   <p className="text-token-text-secondary text-xs">{selectedUser.email}</p>
                   <p className="text-token-text-secondary mt-1 text-xs">
                     {localize('com_nav_balance')}: {selectedUser.tokenCredits.toLocaleString()} ·{' '}
-                    {localize('com_nav_admin_role')}: {selectedUser.role ?? '—'}
+                    {localize('com_nav_admin_role')}: {selectedUser.role ?? '—'} ·{' '}
+                    {localize('com_nav_admin_bonus_resets', { 0: selectedUser.bonusResets ?? 0 })}
                   </p>
                 </div>
                 <div className="flex items-center gap-1">
@@ -716,6 +750,24 @@ const AdminPanel: React.FC = () => {
                   disabled={addBalanceMutation.isLoading}
                 >
                   {localize('com_nav_admin_add_credits')}
+                </Button>
+                <Input
+                  type="number"
+                  step={1}
+                  placeholder={localize('com_nav_admin_grant_resets_placeholder')}
+                  aria-label={localize('com_nav_admin_grant_resets')}
+                  value={grantResetsAmount}
+                  onChange={(e) => setGrantResetsAmount(e.target.value)}
+                  className="w-24"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleGrantResets(selectedUser)}
+                  disabled={grantResetsMutation.isLoading}
+                >
+                  {localize('com_nav_admin_grant_resets')}
                 </Button>
               </div>
             </div>

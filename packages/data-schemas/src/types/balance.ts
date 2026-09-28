@@ -10,6 +10,8 @@ export interface IBalance extends Document {
   refillIntervalUnit: RefillIntervalUnit;
   lastRefill: Date;
   refillAmount: number;
+  usageResets?: Date[];
+  bonusResets?: number;
   tenantId?: string;
 }
 
@@ -22,4 +24,10 @@ export interface IBalanceUpdate {
   refillIntervalUnit?: RefillIntervalUnit;
   refillAmount?: number;
   lastRefill?: Date;
+}
+
+/** Outcome of a successful usage reset; `balance` reflects the record after the reset */
+export interface UsageResetClaim {
+  source: 'daily' | 'bonus';
+  balance: Pick<IBalance, 'tokenCredits' | 'usageResets' | 'bonusResets'>;
 }

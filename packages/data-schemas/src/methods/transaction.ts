@@ -1,5 +1,5 @@
 import type { FilterQuery, Model, Types } from 'mongoose';
-import type { IBalance, IBalanceUpdate, TransactionData } from '~/types';
+import type { IBalance, IBalanceUpdate, TransactionData, UsageResetClaim } from '~/types';
 import type { ITransaction } from '~/schema/transaction';
 import logger from '~/config/winston';
 
@@ -443,6 +443,92 @@ export function createTransactionMethods(
     ).lean<IBalance>();
   }
 
+  /**
+   * Atomically restores a user's balance to `allotment`, spending a daily reset first and a bonus
+   * reset once the daily ones are used up. Daily resets are timestamped in `usageResets` and free up
+   * `windowMs` after use. Returns `null` when no reset is available or the balance is already at or
+   * above the allotment.
+   */
+  async function claimUsageReset({
+    user,
+    allotment,
+    perDay,
+    windowMs,
+    now = new Date(),
+  }: {
+    user: string;
+    allotment: number;
+    perDay: number;
+    windowMs: number;
+    now?: Date;
+  }): Promise<UsageResetClaim | null> {
+    const Balance = mongoose.models.Balance as Model<IBalance>;
+    const cutoff = new Date(now.getTime() - windowMs);
+    await Balance.updateOne({ user }, { $pull: { usageResets: { $lt: cutoff } } });
+
+    const belowAllotment = { user, tokenCredits: { $lt: allotment } };
+    const daily =
+      perDay > 0
+        ? await Balance.findOneAndUpdate(
+            { ...belowAllotment, [`usageResets.${perDay - 1}`]: { $exists: false } },
+            { $set: { tokenCredits: allotment }, $push: { usageResets: now } },
+            { new: false },
+          ).lean<IBalance>()
+        : null;
+    const bonus = daily
+      ? null
+      : await Balance.findOneAndUpdate(
+          { ...belowAllotment, bonusResets: { $gte: 1 } },
+          { $set: { tokenCredits: allotment }, $inc: { bonusResets: -1 } },
+          { new: false },
+        ).lean<IBalance>();
+
+    const previous = daily ?? bonus;
+    if (!previous) {
+      return null;
+    }
+
+    const restored = allotment - previous.tokenCredits;
+    const Transaction = mongoose.models.Transaction;
+    await Transaction.create({
+      user,
+      tokenType: 'credits',
+      context: 'usageReset',
+      rawAmount: restored,
+      tokenValue: restored,
+    });
+
+    const usageResets = previous.usageResets ?? [];
+    const bonusResets = previous.bonusResets ?? 0;
+    return {
+      source: daily ? 'daily' : 'bonus',
+      balance: {
+        tokenCredits: allotment,
+        usageResets: daily ? [...usageResets, now] : usageResets,
+        bonusResets: daily ? bonusResets : bonusResets - 1,
+      },
+    };
+  }
+
+  /**
+   * Adds `amount` admin-granted resets to a user's balance record (negative revokes, floored at 0).
+   * Returns `null` when the user has no balance record yet.
+   */
+  async function grantUsageResets(user: string, amount: number): Promise<IBalance | null> {
+    const Balance = mongoose.models.Balance as Model<IBalance>;
+    return Balance.findOneAndUpdate(
+      { user },
+      [
+        {
+          $set: {
+            bonusResets: { $max: [0, { $add: [{ $ifNull: ['$bonusResets', 0] }, amount] }] },
+          },
+        },
+      ],
+      { new: true },
+    ).lean<IBalance>();
+  }
+
   /** Deletes transactions matching a filter. */
   async function deleteTransactions(
     filter: FilterQuery<ITransaction>,
@@ -477,6 +563,8 @@ export function createTransactionMethods(
     bulkInsertTransactions,
     findBalanceByUser,
     upsertBalanceFields,
+    claimUsageReset,
+    grantUsageResets,
     getTransactions,
     deleteTransactions,
     deleteBalances,

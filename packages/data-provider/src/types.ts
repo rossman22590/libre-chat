@@ -893,6 +893,32 @@ export type TBalanceResponse = {
   refillIntervalUnit?: RefillIntervalUnit;
   lastRefill?: Date | string;
   refillAmount?: number;
+  resets?: TUsageResetStatus;
+};
+
+export type TUsageResetStatus = {
+  /** Balance a reset restores the user to */
+  allotment: number;
+  perDay: number;
+  windowHours: number;
+  /** Resets left in the current rolling window */
+  dailyRemaining: number;
+  /** Admin-granted resets, used once the daily ones run out; they never expire */
+  bonus: number;
+  /** When the oldest reset in the window frees up; absent when no daily reset is in use */
+  nextAvailableAt?: string;
+  /** Whether a reset would currently succeed */
+  canReset: boolean;
+};
+
+export type TUsageResetResponse = {
+  tokenCredits: number;
+  source: 'daily' | 'bonus';
+  resets: TUsageResetStatus;
+};
+
+export type TAdminGrantResetsResponse = {
+  bonusResets: number;
 };
 
 export type TBalanceTransactionItem = {
@@ -952,6 +978,7 @@ export type TAdminUserItem = {
   role?: string;
   createdAt?: string;
   tokenCredits: number;
+  bonusResets?: number;
   conversationCount?: number;
   isBanned?: boolean;
 };

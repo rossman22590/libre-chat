@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { dataService, QueryKeys } from 'librechat-data-provider';
+import { dataService, QueryKeys, MutationKeys } from 'librechat-data-provider';
 
 export const useSetAdminUserBalanceMutation = () => {
   const queryClient = useQueryClient();
@@ -32,6 +32,20 @@ export const useAddAdminUserBalanceMutation = () => {
       onSuccess: (_, variables) => {
         queryClient.invalidateQueries([QueryKeys.adminUsers]);
         queryClient.invalidateQueries([QueryKeys.adminUserTransactions, variables.userId]);
+      },
+    },
+  );
+};
+
+export const useGrantAdminUserResetsMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation(
+    [MutationKeys.grantUsageResets],
+    ({ userId, amount }: { userId: string; amount: number }) =>
+      dataService.grantAdminUserResets(userId, amount),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries([QueryKeys.adminUsers]);
       },
     },
   );

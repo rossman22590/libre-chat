@@ -205,6 +205,10 @@ export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
 }
 
+export function claimUsageReset(): Promise<t.TUsageResetResponse> {
+  return request.post(endpoints.balanceReset());
+}
+
 export function getBalanceTransactions(limit?: number): Promise<t.TBalanceTransactionsResponse> {
   return request.get(endpoints.balanceTransactions(limit));
 }
@@ -241,6 +245,13 @@ export function setAllAdminUsersBalance(
   amount: number,
 ): Promise<{ updatedCount: number; amount: number }> {
   return request.post(endpoints.adminUsersBalanceSetAll(), { amount });
+}
+
+export function grantAdminUserResets(
+  userId: string,
+  amount: number,
+): Promise<t.TAdminGrantResetsResponse> {
+  return request.post(endpoints.adminUserResets(userId), { amount });
 }
 
 export function banAdminUser(

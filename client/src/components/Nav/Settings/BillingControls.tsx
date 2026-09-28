@@ -2,6 +2,7 @@ import type { TBalanceResponse } from 'librechat-data-provider';
 import AutoRefillSettings from '../SettingsTabs/Balance/AutoRefillSettings';
 import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
 import TokenCreditsItem from '../SettingsTabs/Balance/TokenCreditsItem';
+import UsageResetsItem from '../SettingsTabs/Balance/UsageResets';
 import { useAuthContext, useLocalize } from '~/hooks';
 
 function useBalance(): Partial<TBalanceResponse> {
@@ -18,6 +19,14 @@ function useBalance(): Partial<TBalanceResponse> {
 export function TokenCredits() {
   const { tokenCredits = 0 } = useBalance();
   return <TokenCreditsItem tokenCredits={tokenCredits} />;
+}
+
+export function UsageResets() {
+  const { tokenCredits = 0, resets } = useBalance();
+  if (!resets) {
+    return null;
+  }
+  return <UsageResetsItem tokenCredits={tokenCredits} resets={resets} />;
 }
 
 export function AutoRefill() {

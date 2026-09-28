@@ -24,6 +24,7 @@ export interface BalanceMiddlewareOptions {
 
 type BalanceLocals = {
   balanceData?: IBalance | null;
+  balanceConfig?: BalanceConfig | null;
   balanceConfigEnabled?: boolean;
 };
 
@@ -130,6 +131,7 @@ export function createSetBalanceConfig({
         tenantId: user?.tenantId,
       });
       const balanceConfig = getBalanceConfig(appConfig);
+      balanceLocals.balanceConfig = balanceConfig;
       balanceLocals.balanceConfigEnabled = balanceConfig?.enabled === true;
       if (!balanceConfig?.enabled) {
         return next();

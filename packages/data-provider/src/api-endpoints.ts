@@ -46,6 +46,8 @@ export const userPreferences = () => `${user()}/preferences`;
 
 export const balance = () => `${BASE_URL}/api/balance`;
 
+export const balanceReset = () => `${balance()}/reset`;
+
 export const balanceTransactions = (limit?: number) => {
   const params = limit != null ? `?limit=${encodeURIComponent(limit)}` : '';
   return `${BASE_URL}/api/balance/transactions${params}`;
@@ -75,6 +77,8 @@ export const adminUserBalance = (userId: string) =>
 export const adminUsersBalanceSetAll = () => `${adminUsersRoot()}/balance/set-all`;
 export const adminUserBalanceAdd = (userId: string) =>
   `${adminUsersRoot()}/${encodeURIComponent(userId)}/balance/add`;
+export const adminUserResets = (userId: string) =>
+  `${adminUsersRoot()}/${encodeURIComponent(userId)}/resets`;
 export const adminUserBan = (userId: string) =>
   `${adminUsersRoot()}/${encodeURIComponent(userId)}/ban`;
 export const adminUserTransactions = (userId: string, params?: { limit?: number }) => {

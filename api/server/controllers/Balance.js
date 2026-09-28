@@ -1,3 +1,4 @@
+const { buildUsageResetStatus } = require('@librechat/api');
 const { findBalanceByUser } = require('~/models');
 const { Transaction } = require('~/db/models');
 
@@ -16,7 +17,11 @@ async function balanceController(req, res) {
     return res.status(404).json({ error: 'Balance not found' });
   }
 
-  const { _id: _, ...result } = balanceData;
+  const { _id: _, usageResets: __, bonusResets: ___, ...result } = balanceData;
+  const resets = buildUsageResetStatus(balanceLocals.balanceConfig, balanceData);
+  if (resets) {
+    result.resets = resets;
+  }
 
   if (!result.autoRefillEnabled) {
     delete result.refillIntervalValue;

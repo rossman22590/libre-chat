@@ -377,6 +377,11 @@ balance:
   refillIntervalValue: 6
   refillIntervalUnit: 'hours'
   refillAmount: 2500000
+  resets:
+    enabled: true
+    allotment: 2500000
+    perDay: 2
+    windowHours: 24
 
 speech:
   tts:

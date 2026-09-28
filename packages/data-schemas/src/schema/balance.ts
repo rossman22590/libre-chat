@@ -37,6 +37,16 @@ const balanceSchema: Schema<t.IBalance> = new Schema<t.IBalance>({
     type: Number,
     default: 0,
   },
+  /** Timestamps of daily usage resets still inside the rolling window */
+  usageResets: {
+    type: [Date],
+    default: undefined,
+  },
+  /** Admin-granted resets beyond the daily allowance */
+  bonusResets: {
+    type: Number,
+    default: 0,
+  },
   tenantId: {
     type: String,
     index: true,

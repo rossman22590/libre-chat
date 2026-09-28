@@ -10,6 +10,7 @@ const CONTEXT_KEYS: Record<string, TranslationKeys> = {
   title: 'com_nav_balance_transaction_context_title',
   autoRefill: 'com_nav_balance_transaction_context_autoRefill',
   admin: 'com_nav_balance_transaction_context_admin',
+  usageReset: 'com_nav_balance_transaction_context_usageReset',
   reasoning: 'com_nav_balance_transaction_context_reasoning',
   incomplete: 'com_nav_balance_transaction_context_incomplete',
 };

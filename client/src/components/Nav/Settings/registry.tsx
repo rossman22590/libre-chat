@@ -40,7 +40,7 @@ import { ManageFiles } from '../SettingsTabs/Data/ManageFiles';
 import { smoothStreamingAtom } from '~/store/smoothStreaming';
 import { RevokeKeys } from '../SettingsTabs/Data/RevokeKeys';
 import { ClearChats } from '../SettingsTabs/Data/ClearChats';
-import { TokenCredits, AutoRefill } from './BillingControls';
+import { TokenCredits, AutoRefill, UsageResets } from './BillingControls';
 import AdminPanel from '../SettingsTabs/General/AdminPanel';
 import TransactionHistory from '../SettingsTabs/Balance/TransactionHistory';
 import SharedLinks from '../SettingsTabs/Data/SharedLinks';
@@ -713,6 +713,15 @@ export const registry: SettingEntry[] = [
     labelKey: 'com_ui_settings_label_credits',
     show: (ctx) => ctx.balanceEnabled,
     Component: TokenCredits,
+  },
+  {
+    id: 'usageResets',
+    tab: ACCOUNT,
+    section: 'billing',
+    labelKey: 'com_nav_usage_resets',
+    keywords: ['reset', 'usage', 'limit', 'allotment', 'credits', 'wallet'],
+    show: (ctx) => ctx.usageResetsEnabled,
+    Component: UsageResets,
   },
   {
     id: 'autoRefill',
