@@ -205,6 +205,21 @@ export function getUserBalance(): Promise<t.TBalanceResponse> {
   return request.get(endpoints.balance());
 }
 
+export function getUsageSummary(params: {
+  days: t.TUsagePeriodDays;
+  tz?: string;
+}): Promise<t.TUsageSummaryResponse> {
+  return request.get(endpoints.balanceUsage(params));
+}
+
+export function getUsageActivity(params: {
+  kind?: t.TUsageActivityKind;
+  before?: string;
+  limit?: number;
+}): Promise<t.TUsageActivityResponse> {
+  return request.get(endpoints.balanceActivity(params));
+}
+
 export function claimUsageReset(): Promise<t.TUsageResetResponse> {
   return request.post(endpoints.balanceReset());
 }
@@ -252,6 +267,12 @@ export function grantAdminUserResets(
   amount: number,
 ): Promise<t.TAdminGrantResetsResponse> {
   return request.post(endpoints.adminUserResets(userId), { amount });
+}
+
+export function grantAllAdminUsersResets(
+  amount: number,
+): Promise<{ updatedCount: number; amount: number }> {
+  return request.post(endpoints.adminUsersResetsGrantAll(), { amount });
 }
 
 export function banAdminUser(

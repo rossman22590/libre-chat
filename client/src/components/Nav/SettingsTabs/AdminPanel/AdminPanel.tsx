@@ -10,6 +10,7 @@ import {
   useSetAllAdminUsersBalanceMutation,
   useAddAdminUserBalanceMutation,
   useGrantAdminUserResetsMutation,
+  useGrantAllAdminUsersResetsMutation,
   useGetAdminUserConversations,
   useGetAdminUserConversationMessages,
   useGetAdminUserTransactions,
@@ -146,6 +147,8 @@ const AdminPanel: React.FC = () => {
   const [isUserDetailFullscreen, setIsUserDetailFullscreen] = useState(false);
   const [grantAllAmount, setGrantAllAmount] = useState('');
   const [grantResetsAmount, setGrantResetsAmount] = useState('');
+  const [grantAllResetsAmount, setGrantAllResetsAmount] = useState('');
+  const [confirmGrantAllResets, setConfirmGrantAllResets] = useState(false);
 
   const { data: stats, refetch: refetchStats } = useGetAdminStats();
   const {
@@ -182,6 +185,7 @@ const AdminPanel: React.FC = () => {
   const setAllBalanceMutation = useSetAllAdminUsersBalanceMutation();
   const addBalanceMutation = useAddAdminUserBalanceMutation();
   const grantResetsMutation = useGrantAdminUserResetsMutation();
+  const grantAllResetsMutation = useGrantAllAdminUsersResetsMutation();
 
   const handleSearchSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -347,6 +351,48 @@ const AdminPanel: React.FC = () => {
     });
   }, [grantAllAmount, setAllBalanceMutation, showToast, localize, refetchUsers, refetchStats]);
 
+  useEffect(() => {
+    if (!confirmGrantAllResets) {
+      return;
+    }
+    const timer = setTimeout(() => setConfirmGrantAllResets(false), 5000);
+    return () => clearTimeout(timer);
+  }, [confirmGrantAllResets]);
+
+  const handleGrantAllResets = useCallback(() => {
+    const amount = parseInt(grantAllResetsAmount, 10);
+    if (isNaN(amount) || amount === 0) {
+      showToast({ status: 'error', message: localize('com_ui_error') });
+      return;
+    }
+    if (!confirmGrantAllResets) {
+      setConfirmGrantAllResets(true);
+      return;
+    }
+    setConfirmGrantAllResets(false);
+    grantAllResetsMutation.mutate(amount, {
+      onSuccess: ({ updatedCount }) => {
+        showToast({
+          status: 'success',
+          message: localize('com_nav_admin_grant_all_resets_success', {
+            0: updatedCount.toLocaleString(),
+            1: amount,
+          }),
+        });
+        setGrantAllResetsAmount('');
+        refetchUsers();
+      },
+      onError: () => showToast({ status: 'error', message: localize('com_ui_error') }),
+    });
+  }, [
+    grantAllResetsAmount,
+    confirmGrantAllResets,
+    grantAllResetsMutation,
+    showToast,
+    localize,
+    refetchUsers,
+  ]);
+
   return (
     <div className="flex flex-col gap-6 text-sm text-text-primary">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -418,6 +464,33 @@ const AdminPanel: React.FC = () => {
             aria-label={localize('com_nav_admin_grant_all_balance')}
           >
             {localize('com_nav_admin_grant_all_balance')}
+          </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            step={1}
+            value={grantAllResetsAmount}
+            onChange={(e) => {
+              setGrantAllResetsAmount(e.target.value);
+              setConfirmGrantAllResets(false);
+            }}
+            placeholder={localize('com_nav_admin_grant_resets_placeholder')}
+            className="w-24"
+            aria-label={localize('com_nav_admin_grant_all_resets')}
+          />
+          <Button
+            type="button"
+            variant={confirmGrantAllResets ? 'destructive' : 'outline'}
+            size="sm"
+            onClick={handleGrantAllResets}
+            disabled={grantAllResetsMutation.isLoading}
+          >
+            {confirmGrantAllResets
+              ? localize('com_nav_admin_grant_all_resets_confirm', {
+                  0: parseInt(grantAllResetsAmount, 10) || 0,
+                })
+              : localize('com_nav_admin_grant_all_resets')}
           </Button>
         </div>
       </div>

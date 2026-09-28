@@ -15,6 +15,8 @@ export const useClaimUsageResetMutation = (): UseMutationResult<
         prev ? { ...prev, tokenCredits, resets } : prev,
       );
       queryClient.invalidateQueries([QueryKeys.balanceTransactions]);
+      queryClient.invalidateQueries([QueryKeys.usageSummary]);
+      queryClient.invalidateQueries([QueryKeys.usageActivity]);
     },
     onError: () => {
       queryClient.invalidateQueries([QueryKeys.balance]);

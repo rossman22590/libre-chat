@@ -1,33 +1,6 @@
-import type { TBalanceResponse } from 'librechat-data-provider';
 import AutoRefillSettings from '../SettingsTabs/Balance/AutoRefillSettings';
-import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
-import TokenCreditsItem from '../SettingsTabs/Balance/TokenCreditsItem';
-import UsageResetsItem from '../SettingsTabs/Balance/UsageResets';
-import { useAuthContext, useLocalize } from '~/hooks';
-
-function useBalance(): Partial<TBalanceResponse> {
-  const { isAuthenticated } = useAuthContext();
-  const { data: startupConfig } = useGetStartupConfig();
-
-  const balanceQuery = useGetUserBalance({
-    enabled: !!isAuthenticated && !!startupConfig?.balance?.enabled,
-  });
-
-  return balanceQuery.data ?? {};
-}
-
-export function TokenCredits() {
-  const { tokenCredits = 0 } = useBalance();
-  return <TokenCreditsItem tokenCredits={tokenCredits} />;
-}
-
-export function UsageResets() {
-  const { tokenCredits = 0, resets } = useBalance();
-  if (!resets) {
-    return null;
-  }
-  return <UsageResetsItem tokenCredits={tokenCredits} resets={resets} />;
-}
+import { useBalance } from '../SettingsTabs/Usage/hooks';
+import { useLocalize } from '~/hooks';
 
 export function AutoRefill() {
   const localize = useLocalize();

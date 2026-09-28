@@ -101,4 +101,29 @@ describe('settings registry', () => {
       expect(entry?.show?.({ ...settingsContext, hasStatefulCodeSessions: false })).toBe(false);
     });
   });
+
+  describe('Usage tab', () => {
+    const usageTab = TABS.find((t) => t.id === SettingsTabValues.BALANCE);
+    const usageEntries = registry.filter((e) => e.tab === SettingsTabValues.BALANCE);
+
+    it('is only shown when balance is enabled', () => {
+      expect(usageTab?.show?.(settingsContext)).toBe(false);
+      expect(usageTab?.show?.({ ...settingsContext, balanceEnabled: true })).toBe(true);
+    });
+
+    it('holds every billing entry, leaving none in the Account tab', () => {
+      const ids = usageEntries.map((e) => e.id);
+      expect(ids).toEqual(expect.arrayContaining(['usageBalance', 'usageActivity', 'autoRefill']));
+      expect(registry.some((e) => e.tab === SettingsTabValues.ACCOUNT && ids.includes(e.id))).toBe(
+        false,
+      );
+    });
+
+    it('shows usage resets only when the deployment enables them', () => {
+      const resets = usageEntries.find((e) => e.id === 'usageResets');
+      const balanceOn = { ...settingsContext, balanceEnabled: true };
+      expect(resets?.show?.(balanceOn)).toBe(false);
+      expect(resets?.show?.({ ...balanceOn, usageResetsEnabled: true })).toBe(true);
+    });
+  });
 });

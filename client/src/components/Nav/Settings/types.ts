@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { MessageSquare, Info } from 'lucide-react';
+import { MessageSquare, Gauge, Info } from 'lucide-react';
 import { SettingsTabValues } from 'librechat-data-provider';
 import { GearIcon, DataIcon, UserIcon, SpeechIcon } from '@librechat/client';
 import type { ComponentType, ReactNode } from 'react';
@@ -12,6 +12,7 @@ export type SettingsTab =
   | SettingsTabValues.LANGFUSE
   | SettingsTabValues.DATA
   | SettingsTabValues.ACCOUNT
+  | SettingsTabValues.BALANCE
   | SettingsTabValues.ABOUT;
 
 export type SectionId =
@@ -34,7 +35,11 @@ export type SectionId =
   | 'danger'
   | 'profile'
   | 'security'
-  | 'billing'
+  | 'overview'
+  | 'spending'
+  | 'models'
+  | 'chats'
+  | 'activity'
   | 'about';
 
 export interface SettingsContextValue {
@@ -157,9 +162,21 @@ export const TABS: TabMeta[] = [
     sections: [
       { id: 'profile', labelKey: 'com_ui_settings_section_profile' },
       { id: 'security', labelKey: 'com_ui_settings_section_security' },
-      { id: 'billing', labelKey: 'com_ui_settings_section_billing' },
       { id: 'danger', labelKey: 'com_ui_settings_section_danger_zone', danger: true },
     ],
+  },
+  {
+    id: SettingsTabValues.BALANCE,
+    labelKey: 'com_nav_setting_usage',
+    icon: createElement(Gauge, { className: 'icon-sm', 'aria-hidden': true }),
+    sections: [
+      { id: 'overview', labelKey: 'com_ui_settings_section_overview' },
+      { id: 'spending', labelKey: 'com_ui_settings_section_spending' },
+      { id: 'models', labelKey: 'com_ui_settings_section_models' },
+      { id: 'chats', labelKey: 'com_ui_settings_section_top_chats' },
+      { id: 'activity', labelKey: 'com_ui_settings_section_activity' },
+    ],
+    show: (ctx) => ctx.balanceEnabled,
   },
   {
     id: SettingsTabValues.ABOUT,

@@ -36,6 +36,15 @@ export interface GrantUsageResetsDeps {
   grantUsageResets: (user: string, amount: number) => Promise<IBalance | null>;
 }
 
+export interface GrantAllUsageResetsDeps {
+  grantUsageResetsToAll: (amount: number) => Promise<number>;
+}
+
+function parseGrantAmount(body: unknown): number | null {
+  const amount = Number((body as { amount?: number | string } | undefined)?.amount);
+  return Number.isInteger(amount) && amount !== 0 && Math.abs(amount) <= MAX_GRANT ? amount : null;
+}
+
 /** Resolves reset settings from the effective balance config; `null` when resets are off. */
 export function resolveUsageResetConfig(
   balanceConfig?: BalanceConfig | null,
@@ -148,12 +157,12 @@ export function createUsageResetHandler({ claimUsageReset }: UsageResetDeps) {
 export function createGrantUsageResetsHandler({ grantUsageResets }: GrantUsageResetsDeps) {
   return async (req: ServerRequest, res: Response): Promise<void> => {
     const { userId } = req.params as { userId: string };
-    const amount = Number((req.body as { amount?: number | string } | undefined)?.amount);
+    const amount = parseGrantAmount(req.body);
     if (!isValidObjectIdString(userId)) {
       res.status(400).json({ error: 'Invalid user ID' });
       return;
     }
-    if (!Number.isInteger(amount) || amount === 0 || Math.abs(amount) > MAX_GRANT) {
+    if (amount == null) {
       res.status(400).json({ error: `Amount must be a non-zero integer up to ${MAX_GRANT}` });
       return;
     }
@@ -167,6 +176,27 @@ export function createGrantUsageResetsHandler({ grantUsageResets }: GrantUsageRe
       res.status(200).json({ bonusResets: balance.bonusResets ?? 0 });
     } catch (error) {
       logger.error('[usageReset] Failed to grant resets:', error);
+      res.status(500).json({ error: 'Failed to grant resets' });
+    }
+  };
+}
+
+/** `POST /api/admin/users/resets/grant-all` — shifts every user's bonus resets by `amount`. */
+export function createGrantAllUsageResetsHandler({
+  grantUsageResetsToAll,
+}: GrantAllUsageResetsDeps) {
+  return async (req: ServerRequest, res: Response): Promise<void> => {
+    const amount = parseGrantAmount(req.body);
+    if (amount == null) {
+      res.status(400).json({ error: `Amount must be a non-zero integer up to ${MAX_GRANT}` });
+      return;
+    }
+
+    try {
+      const updatedCount = await grantUsageResetsToAll(amount);
+      res.status(200).json({ updatedCount, amount });
+    } catch (error) {
+      logger.error('[usageReset] Failed to grant resets to all users:', error);
       res.status(500).json({ error: 'Failed to grant resets' });
     }
   };

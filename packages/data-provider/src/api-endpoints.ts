@@ -48,6 +48,21 @@ export const balance = () => `${BASE_URL}/api/balance`;
 
 export const balanceReset = () => `${balance()}/reset`;
 
+export const balanceUsage = (params: { days: number; tz?: string }) => {
+  const searchParams = new URLSearchParams({ days: String(params.days) });
+  if (params.tz) searchParams.set('tz', params.tz);
+  return `${balance()}/usage?${searchParams.toString()}`;
+};
+
+export const balanceActivity = (params: { kind?: string; before?: string; limit?: number }) => {
+  const searchParams = new URLSearchParams();
+  if (params.kind) searchParams.set('kind', params.kind);
+  if (params.before) searchParams.set('before', params.before);
+  if (params.limit != null) searchParams.set('limit', String(params.limit));
+  const q = searchParams.toString();
+  return `${balance()}/activity${q ? `?${q}` : ''}`;
+};
+
 export const balanceTransactions = (limit?: number) => {
   const params = limit != null ? `?limit=${encodeURIComponent(limit)}` : '';
   return `${BASE_URL}/api/balance/transactions${params}`;
@@ -77,6 +92,7 @@ export const adminUserBalance = (userId: string) =>
 export const adminUsersBalanceSetAll = () => `${adminUsersRoot()}/balance/set-all`;
 export const adminUserBalanceAdd = (userId: string) =>
   `${adminUsersRoot()}/${encodeURIComponent(userId)}/balance/add`;
+export const adminUsersResetsGrantAll = () => `${adminUsersRoot()}/resets/grant-all`;
 export const adminUserResets = (userId: string) =>
   `${adminUsersRoot()}/${encodeURIComponent(userId)}/resets`;
 export const adminUserBan = (userId: string) =>

@@ -16,6 +16,8 @@ export enum QueryKeys {
   models = 'models',
   balance = 'balance',
   balanceTransactions = 'balanceTransactions',
+  usageSummary = 'usageSummary',
+  usageActivity = 'usageActivity',
   adminUsers = 'adminUsers',
   adminStats = 'adminStats',
   adminUserConversations = 'adminUserConversations',
@@ -112,6 +114,7 @@ export const DynamicQueryKeys = {
 export enum MutationKeys {
   claimUsageReset = 'claimUsageReset',
   grantUsageResets = 'grantUsageResets',
+  grantAllUsageResets = 'grantAllUsageResets',
   subagentControl = 'subagentControl',
   enqueueAgentQueuedTurn = 'enqueueAgentQueuedTurn',
   cancelAgentQueuedTurn = 'cancelAgentQueuedTurn',

@@ -40,9 +40,16 @@ import { ManageFiles } from '../SettingsTabs/Data/ManageFiles';
 import { smoothStreamingAtom } from '~/store/smoothStreaming';
 import { RevokeKeys } from '../SettingsTabs/Data/RevokeKeys';
 import { ClearChats } from '../SettingsTabs/Data/ClearChats';
-import { TokenCredits, AutoRefill, UsageResets } from './BillingControls';
+import { AutoRefill } from './BillingControls';
 import AdminPanel from '../SettingsTabs/General/AdminPanel';
-import TransactionHistory from '../SettingsTabs/Balance/TransactionHistory';
+import {
+  UsageChats,
+  UsageModels,
+  UsageResets,
+  UsageActivity,
+  UsageOverview,
+  UsageSpending,
+} from '../SettingsTabs/Usage';
 import SharedLinks from '../SettingsTabs/Data/SharedLinks';
 import ImageResize from '../SettingsTabs/Chat/ImageResize';
 import { showThinkingAtom } from '~/store/showThinking';
@@ -56,6 +63,7 @@ import { TTSEndpoints } from '~/common';
 import store from '~/store';
 
 const { GENERAL, CHAT, SPEECH, DATA, ACCOUNT, ABOUT } = SettingsTabValues;
+const USAGE = SettingsTabValues.BALANCE;
 
 export const registry: SettingEntry[] = [
   // General · Appearance
@@ -705,41 +713,6 @@ export const registry: SettingEntry[] = [
     show: (ctx) => ctx.isLocalProvider && ctx.twoFactorEnabled,
     Component: BackupCodesItem,
   },
-  // Account · Billing
-  {
-    id: 'tokenCredits',
-    tab: ACCOUNT,
-    section: 'billing',
-    labelKey: 'com_ui_settings_label_credits',
-    show: (ctx) => ctx.balanceEnabled,
-    Component: TokenCredits,
-  },
-  {
-    id: 'usageResets',
-    tab: ACCOUNT,
-    section: 'billing',
-    labelKey: 'com_nav_usage_resets',
-    keywords: ['reset', 'usage', 'limit', 'allotment', 'credits', 'wallet'],
-    show: (ctx) => ctx.usageResetsEnabled,
-    Component: UsageResets,
-  },
-  {
-    id: 'autoRefill',
-    tab: ACCOUNT,
-    section: 'billing',
-    labelKey: 'com_ui_settings_label_auto_refill',
-    show: (ctx) => ctx.balanceEnabled,
-    Component: AutoRefill,
-  },
-  {
-    id: 'transactionHistory',
-    tab: ACCOUNT,
-    section: 'billing',
-    labelKey: 'com_nav_balance_transaction_history',
-    keywords: ['transaction', 'history', 'usage', 'credits', 'tokens', 'spend'],
-    show: (ctx) => ctx.balanceEnabled,
-    Component: TransactionHistory,
-  },
   // Account · Danger zone
   {
     id: 'deleteAccount',
@@ -749,7 +722,70 @@ export const registry: SettingEntry[] = [
     show: (ctx) => ctx.allowAccountDeletion,
     Component: DeleteAccount,
   },
-
+  // Usage · Overview
+  {
+    id: 'usageBalance',
+    tab: USAGE,
+    section: 'overview',
+    labelKey: 'com_ui_settings_label_credits',
+    keywords: ['balance', 'credits', 'wallet', 'tokens'],
+    show: (ctx) => ctx.balanceEnabled,
+    Component: UsageOverview,
+  },
+  {
+    id: 'usageResets',
+    tab: USAGE,
+    section: 'overview',
+    labelKey: 'com_nav_usage_resets',
+    keywords: ['reset', 'limit', 'allotment', 'refill'],
+    show: (ctx) => ctx.usageResetsEnabled,
+    Component: UsageResets,
+  },
+  {
+    id: 'autoRefill',
+    tab: USAGE,
+    section: 'overview',
+    labelKey: 'com_ui_settings_label_auto_refill',
+    show: (ctx) => ctx.balanceEnabled,
+    Component: AutoRefill,
+  },
+  // Usage · Spending
+  {
+    id: 'usageSpending',
+    tab: USAGE,
+    section: 'spending',
+    labelKey: 'com_ui_settings_section_spending',
+    keywords: ['spend', 'cost', 'usage', 'chart', 'grants', 'refills'],
+    show: (ctx) => ctx.balanceEnabled,
+    Component: UsageSpending,
+  },
+  {
+    id: 'usageModels',
+    tab: USAGE,
+    section: 'models',
+    labelKey: 'com_ui_settings_section_models',
+    keywords: ['model', 'cost', 'most used', 'per message'],
+    show: (ctx) => ctx.balanceEnabled,
+    Component: UsageModels,
+  },
+  {
+    id: 'usageChats',
+    tab: USAGE,
+    section: 'chats',
+    labelKey: 'com_ui_settings_section_top_chats',
+    keywords: ['conversation', 'chat', 'cost'],
+    show: (ctx) => ctx.balanceEnabled,
+    Component: UsageChats,
+  },
+  {
+    id: 'usageActivity',
+    tab: USAGE,
+    section: 'activity',
+    labelKey: 'com_ui_settings_section_activity',
+    keywords: ['transaction', 'history', 'ledger', 'credits', 'spent', 'added'],
+    show: (ctx) => ctx.balanceEnabled,
+    Component: UsageActivity,
+  },
   // About
   {
     id: 'about',

@@ -921,6 +921,89 @@ export type TAdminGrantResetsResponse = {
   bonusResets: number;
 };
 
+/** Lookback windows offered by the usage dashboard, in days */
+export type TUsagePeriodDays = 1 | 7 | 30 | 90;
+
+export type TUsageTotals = {
+  spentCredits: number;
+  addedCredits: number;
+  inputTokens: number;
+  outputTokens: number;
+  messageCount: number;
+  conversationCount: number;
+};
+
+/** Credits added in the period, grouped by transaction context (admin, autoRefill, usageReset…) */
+export type TUsageGrant = {
+  context: string;
+  credits: number;
+  count: number;
+};
+
+/** `bucket` is `YYYY-MM-DD` for daily series and `YYYY-MM-DDTHH` for hourly, in the caller's timezone */
+export type TUsageSeriesPoint = {
+  bucket: string;
+  spentCredits: number;
+  addedCredits: number;
+};
+
+export type TUsageModelStat = {
+  model: string;
+  spentCredits: number;
+  inputCredits: number;
+  outputCredits: number;
+  inputTokens: number;
+  outputTokens: number;
+  messageCount: number;
+  lastUsedAt: string;
+};
+
+export type TUsageChatStat = {
+  conversationId: string;
+  title?: string;
+  spentCredits: number;
+  messageCount: number;
+  topModel?: string;
+  lastActiveAt: string;
+};
+
+export type TUsageSummary = {
+  totals: TUsageTotals;
+  grants: TUsageGrant[];
+  series: TUsageSeriesPoint[];
+  models: TUsageModelStat[];
+  chats: TUsageChatStat[];
+};
+
+export type TUsageSummaryResponse = TUsageSummary & {
+  days: TUsagePeriodDays;
+  since: string;
+  granularity: 'hour' | 'day';
+};
+
+export type TUsageActivityKind = 'all' | 'spent' | 'added';
+
+/** One ledger row: a chat message (its prompt/completion transactions merged) or a single credit grant */
+export type TUsageActivityItem = {
+  id: string;
+  type: 'chat' | 'credit';
+  context?: string;
+  conversationId?: string;
+  title?: string;
+  models: string[];
+  createdAt: string;
+  spentCredits: number;
+  addedCredits: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedTokens: number;
+};
+
+export type TUsageActivityResponse = {
+  items: TUsageActivityItem[];
+  nextCursor: string | null;
+};
+
 export type TBalanceTransactionItem = {
   _id: string;
   context?: string;

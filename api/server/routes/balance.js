@@ -1,9 +1,19 @@
 const express = require('express');
-const { createSetBalanceConfig, createUsageResetHandler } = require('@librechat/api');
+const {
+  createUsageHandlers,
+  createSetBalanceConfig,
+  createUsageResetHandler,
+} = require('@librechat/api');
 const router = express.Router();
 const balanceController = require('../controllers/Balance');
 const { requireJwtAuth } = require('../middleware/');
-const { findBalanceByUser, upsertBalanceFields, claimUsageReset } = require('~/models');
+const {
+  claimUsageReset,
+  getUsageSummary,
+  getUsageActivity,
+  findBalanceByUser,
+  upsertBalanceFields,
+} = require('~/models');
 const { getAppConfig } = require('~/server/services/Config');
 
 const setBalanceConfig = createSetBalanceConfig({
@@ -11,6 +21,7 @@ const setBalanceConfig = createSetBalanceConfig({
   findBalanceByUser,
   upsertBalanceFields,
 });
+const usage = createUsageHandlers({ getUsageSummary, getUsageActivity });
 
 router.get('/', requireJwtAuth, setBalanceConfig, balanceController);
 router.post(
@@ -19,6 +30,8 @@ router.post(
   setBalanceConfig,
   createUsageResetHandler({ claimUsageReset }),
 );
+router.get('/usage', requireJwtAuth, usage.summary);
+router.get('/activity', requireJwtAuth, usage.activity);
 router.get('/transactions', requireJwtAuth, balanceController.balanceTransactionsController);
 
 module.exports = router;

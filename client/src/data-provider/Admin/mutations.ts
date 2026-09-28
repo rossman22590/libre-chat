@@ -51,6 +51,19 @@ export const useGrantAdminUserResetsMutation = () => {
   );
 };
 
+export const useGrantAllAdminUsersResetsMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation(
+    [MutationKeys.grantAllUsageResets],
+    (amount: number) => dataService.grantAllAdminUsersResets(amount),
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries([QueryKeys.adminUsers]);
+      },
+    },
+  );
+};
+
 export const useBanAdminUserMutation = () => {
   const queryClient = useQueryClient();
   return useMutation(

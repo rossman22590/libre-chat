@@ -15,6 +15,7 @@ export * from './Projects';
 export * from './Schedules';
 export * from './Subagents';
 export * from './Tools';
+export * from './Usage';
 export * from './connection';
 export * from './Favorites';
 export * from './mutations';

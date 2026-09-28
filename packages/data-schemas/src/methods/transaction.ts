@@ -37,6 +37,15 @@ interface InternalTxDoc {
   readTokens?: number;
 }
 
+/** Pipeline update that shifts `bonusResets` by `amount`, never below zero */
+const bonusResetsUpdate = (amount: number) => [
+  {
+    $set: {
+      bonusResets: { $max: [0, { $add: [{ $ifNull: ['$bonusResets', 0] }, amount] }] },
+    },
+  },
+];
+
 /** Input data for creating a transaction */
 export interface TxData {
   user: string | Types.ObjectId;
@@ -516,17 +525,16 @@ export function createTransactionMethods(
    */
   async function grantUsageResets(user: string, amount: number): Promise<IBalance | null> {
     const Balance = mongoose.models.Balance as Model<IBalance>;
-    return Balance.findOneAndUpdate(
-      { user },
-      [
-        {
-          $set: {
-            bonusResets: { $max: [0, { $add: [{ $ifNull: ['$bonusResets', 0] }, amount] }] },
-          },
-        },
-      ],
-      { new: true },
-    ).lean<IBalance>();
+    return Balance.findOneAndUpdate({ user }, bonusResetsUpdate(amount), {
+      new: true,
+    }).lean<IBalance>();
+  }
+
+  /** Adds `amount` bonus resets to every balance record in scope; returns how many were updated. */
+  async function grantUsageResetsToAll(amount: number): Promise<number> {
+    const Balance = mongoose.models.Balance as Model<IBalance>;
+    const result = await Balance.updateMany({}, bonusResetsUpdate(amount));
+    return result.modifiedCount;
   }
 
   /** Deletes transactions matching a filter. */
@@ -565,6 +573,7 @@ export function createTransactionMethods(
     upsertBalanceFields,
     claimUsageReset,
     grantUsageResets,
+    grantUsageResetsToAll,
     getTransactions,
     deleteTransactions,
     deleteBalances,

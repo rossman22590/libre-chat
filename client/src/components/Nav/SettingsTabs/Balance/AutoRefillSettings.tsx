@@ -31,6 +31,8 @@ const AutoRefillSettings: React.FC<AutoRefillSettingsProps> = ({
   const refillEligibilityDate = lastRefillDate
     ? getRefillEligibilityDate(lastRefillDate, refillIntervalValue, refillIntervalUnit)
     : null;
+  const isRefillReady =
+    refillEligibilityDate != null && refillEligibilityDate.getTime() <= Date.now();
 
   const getLocalizedIntervalUnit = (value: number, unit: RefillIntervalUnit): string => {
     let key: TranslationKeys;
@@ -62,15 +64,19 @@ const AutoRefillSettings: React.FC<AutoRefillSettingsProps> = ({
   };
 
   return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-medium">{localize('com_nav_balance_auto_refill_settings')}</h3>
+    <div className="space-y-2">
+      <h3 className="font-medium text-text-primary">
+        {localize('com_nav_balance_auto_refill_settings')}
+      </h3>
       <div className="mb-1 flex justify-between text-sm">
         <span>{localize('com_nav_balance_last_refill')}</span>
         <span>{lastRefillDate ? lastRefillDate.toLocaleString(undefined, { hour12 }) : '-'}</span>
       </div>
       <div className="mb-1 flex justify-between text-sm">
         <span>{localize('com_nav_balance_refill_amount')}</span>
-        <span>{refillAmount !== undefined ? refillAmount : '-'}</span>
+        <span className="tabular-nums">
+          {refillAmount !== undefined ? refillAmount.toLocaleString() : '-'}
+        </span>
       </div>
       <div className="mb-1 flex justify-between text-sm">
         <span>{localize('com_nav_balance_interval')}</span>
@@ -86,11 +92,18 @@ const AutoRefillSettings: React.FC<AutoRefillSettingsProps> = ({
         </div>
 
         <span className="text-sm font-medium text-text-primary" role="note">
-          {refillEligibilityDate
+          {isRefillReady && localize('com_nav_balance_next_refill_ready')}
+          {!isRefillReady && refillEligibilityDate
             ? refillEligibilityDate.toLocaleString(undefined, { hour12 })
-            : '-'}
+            : null}
+          {!refillEligibilityDate && '-'}
         </span>
       </div>
+      {isRefillReady && (
+        <p className="text-xs text-text-secondary">
+          {localize('com_nav_balance_next_refill_ready_info')}
+        </p>
+      )}
     </div>
   );
 };

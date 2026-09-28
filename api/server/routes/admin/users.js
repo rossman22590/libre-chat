@@ -1,5 +1,9 @@
 const express = require('express');
-const { createAdminUsersHandlers, createGrantUsageResetsHandler } = require('@librechat/api');
+const {
+  createAdminUsersHandlers,
+  createGrantUsageResetsHandler,
+  createGrantAllUsageResetsHandler,
+} = require('@librechat/api');
 const { SystemCapabilities } = require('@librechat/data-schemas');
 const adminUsersController = require('~/server/controllers/admin/users');
 const { requireCapability } = require('~/server/middleware/roles/capabilities');
@@ -41,6 +45,11 @@ router.get('/stats', requireReadUsers, adminUsersController.getStats);
 router.get('/', requireReadUsers, adminUsersController.listUsers);
 router.get('/search', requireReadUsers, handlers.searchUsers);
 router.post('/balance/set-all', requireManageUsers, adminUsersController.setAllUsersBalance);
+router.post(
+  '/resets/grant-all',
+  requireManageUsers,
+  createGrantAllUsageResetsHandler({ grantUsageResetsToAll: db.grantUsageResetsToAll }),
+);
 router.put('/:userId/balance', requireManageUsers, adminUsersController.setUserBalance);
 router.post('/:userId/balance/add', requireManageUsers, adminUsersController.addUserBalance);
 router.post(
