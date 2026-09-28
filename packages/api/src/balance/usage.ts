@@ -8,6 +8,7 @@ import type {
 } from 'librechat-data-provider';
 import type { Response } from 'express';
 import type { ServerRequest } from '~/types/http';
+import type { BalanceRouteHandler } from './resets';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_DAYS: TUsagePeriodDays = 30;
@@ -61,8 +62,16 @@ function parseLimit(value?: string): number {
   return Math.min(limit, MAX_ACTIVITY_LIMIT);
 }
 
+export interface UsageHandlers {
+  summary: BalanceRouteHandler;
+  activity: BalanceRouteHandler;
+}
+
 /** `GET /api/balance/usage` and `GET /api/balance/activity` for the signed-in user. */
-export function createUsageHandlers({ getUsageSummary, getUsageActivity }: UsageDeps) {
+export function createUsageHandlers({
+  getUsageSummary,
+  getUsageActivity,
+}: UsageDeps): UsageHandlers {
   async function summary(req: ServerRequest, res: Response): Promise<void> {
     const userId = req.user?.id;
     if (!userId) {

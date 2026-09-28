@@ -18,6 +18,9 @@ export interface UsageResetSettings {
 
 type ResetRecord = Pick<IBalance, 'tokenCredits' | 'usageResets' | 'bonusResets'>;
 
+/** Express handler signature shared by the balance route factories */
+export type BalanceRouteHandler = (req: ServerRequest, res: Response) => Promise<void>;
+
 type BalanceLocals = {
   balanceData?: IBalance | null;
   balanceConfig?: BalanceConfig | null;
@@ -112,7 +115,7 @@ export function buildUsageResetStatus(
  * `POST /api/balance/reset` — expects `createSetBalanceConfig` to run first so the user's
  * role-scoped balance config and record are on `res.locals`.
  */
-export function createUsageResetHandler({ claimUsageReset }: UsageResetDeps) {
+export function createUsageResetHandler({ claimUsageReset }: UsageResetDeps): BalanceRouteHandler {
   return async (req: ServerRequest, res: Response): Promise<void> => {
     const locals = res.locals as BalanceLocals;
     const settings = resolveUsageResetConfig(locals.balanceConfig);
@@ -154,7 +157,9 @@ export function createUsageResetHandler({ claimUsageReset }: UsageResetDeps) {
 }
 
 /** `POST /api/admin/users/:userId/resets` — grants bonus resets; a negative amount revokes. */
-export function createGrantUsageResetsHandler({ grantUsageResets }: GrantUsageResetsDeps) {
+export function createGrantUsageResetsHandler({
+  grantUsageResets,
+}: GrantUsageResetsDeps): BalanceRouteHandler {
   return async (req: ServerRequest, res: Response): Promise<void> => {
     const { userId } = req.params as { userId: string };
     const amount = parseGrantAmount(req.body);
@@ -184,7 +189,7 @@ export function createGrantUsageResetsHandler({ grantUsageResets }: GrantUsageRe
 /** `POST /api/admin/users/resets/grant-all` — shifts every user's bonus resets by `amount`. */
 export function createGrantAllUsageResetsHandler({
   grantUsageResetsToAll,
-}: GrantAllUsageResetsDeps) {
+}: GrantAllUsageResetsDeps): BalanceRouteHandler {
   return async (req: ServerRequest, res: Response): Promise<void> => {
     const amount = parseGrantAmount(req.body);
     if (amount == null) {
