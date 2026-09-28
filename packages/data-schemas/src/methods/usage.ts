@@ -159,7 +159,27 @@ function groupActivity(rows: ActivityRow[]): TUsageActivityItem[] {
   return [...items.values()];
 }
 
-export function createUsageMethods(mongoose: typeof import('mongoose')) {
+export interface UsageSummaryParams {
+  user: string;
+  since: Date;
+  /** IANA timezone used to bucket the series */
+  timezone: string;
+  granularity: 'hour' | 'day';
+}
+
+export interface UsageActivityParams {
+  user: string;
+  kind: TUsageActivityKind;
+  before?: Date;
+  limit: number;
+}
+
+export interface UsageMethods {
+  getUsageSummary: (params: UsageSummaryParams) => Promise<TUsageSummary>;
+  getUsageActivity: (params: UsageActivityParams) => Promise<TUsageActivityResponse>;
+}
+
+export function createUsageMethods(mongoose: typeof import('mongoose')): UsageMethods {
   async function findTitles(user: string, conversationIds: string[]): Promise<Map<string, string>> {
     if (conversationIds.length === 0) {
       return new Map();
@@ -181,12 +201,7 @@ export function createUsageMethods(mongoose: typeof import('mongoose')) {
     since,
     timezone,
     granularity,
-  }: {
-    user: string;
-    since: Date;
-    timezone: string;
-    granularity: 'hour' | 'day';
-  }): Promise<TUsageSummary> {
+  }: UsageSummaryParams): Promise<TUsageSummary> {
     const Transaction = mongoose.models.Transaction as Model<ITransaction>;
     const spendOnly = { $match: { tokenType: { $in: SPEND_TYPES } } };
     const [facets] = await Transaction.aggregate<SummaryFacets>([
@@ -344,12 +359,7 @@ export function createUsageMethods(mongoose: typeof import('mongoose')) {
     kind,
     before,
     limit,
-  }: {
-    user: string;
-    kind: TUsageActivityKind;
-    before?: Date;
-    limit: number;
-  }): Promise<TUsageActivityResponse> {
+  }: UsageActivityParams): Promise<TUsageActivityResponse> {
     const Transaction = mongoose.models.Transaction as Model<ITransaction>;
     const filter: FilterQuery<ITransaction> = { user };
     if (before) {
@@ -394,5 +404,3 @@ export function createUsageMethods(mongoose: typeof import('mongoose')) {
 
   return { getUsageSummary, getUsageActivity };
 }
-
-export type UsageMethods = ReturnType<typeof createUsageMethods>;

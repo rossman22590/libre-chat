@@ -93,6 +93,15 @@ export function createTransactionMethods(
   bulkInsertTransactions: (docs: TransactionData[]) => Promise<void>;
   findBalanceByUser: (user: string) => Promise<IBalance | null>;
   upsertBalanceFields: (user: string, fields: IBalanceUpdate) => Promise<IBalance | null>;
+  claimUsageReset: (params: {
+    user: string;
+    allotment: number;
+    perDay: number;
+    windowMs: number;
+    now?: Date;
+  }) => Promise<UsageResetClaim | null>;
+  grantUsageResets: (user: string, amount: number) => Promise<IBalance | null>;
+  grantUsageResetsToAll: (amount: number) => Promise<number>;
   getTransactions: (filter: FilterQuery<ITransaction>) => Promise<ITransaction[]>;
   deleteTransactions: (
     filter: FilterQuery<ITransaction>,
