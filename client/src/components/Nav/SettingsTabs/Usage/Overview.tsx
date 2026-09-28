@@ -1,5 +1,5 @@
 import { Progress } from '@librechat/client';
-import { formatCompact, formatUsd, formatWhole, percentOf } from './format';
+import { formatCompact, formatWhole, percentOf } from './format';
 import { useLocalize } from '~/hooks';
 import { useBalance } from './hooks';
 
@@ -21,9 +21,6 @@ export default function Overview() {
             {formatWhole(credits)}
           </span>
           <span className="text-sm text-text-secondary">{localize('com_nav_usage_credits')}</span>
-        </div>
-        <div className="mt-0.5 text-xs tabular-nums text-text-secondary">
-          {localize('com_nav_usage_approx_usd', { 0: formatUsd(credits) })}
         </div>
       </div>
       {allotment != null && percentLeft != null && (

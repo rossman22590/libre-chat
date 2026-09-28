@@ -4,7 +4,7 @@ import { Plus, Type, RotateCcw, RefreshCw, ShieldCheck, MessageSquare } from 'lu
 import type { TUsageActivityItem, TUsageActivityKind } from 'librechat-data-provider';
 import type { LucideIcon } from 'lucide-react';
 import type { TranslationKeys } from '~/hooks';
-import { formatCompact, formatUsd, formatWhole, splitModel } from './format';
+import { formatCompact, formatWhole, splitModel } from './format';
 import { useUsageActivityQuery } from '~/data-provider';
 import { useLocalize, useClockFormat } from '~/hooks';
 import { GRANT_LABELS } from './Spending';
@@ -138,7 +138,7 @@ function ActivityRow({ item }: { item: TUsageActivityItem }) {
           </div>
         )}
         <div className="text-xs text-text-secondary">
-          {formatUsd(isCredit ? item.addedCredits : item.spentCredits)}
+          {localize('com_nav_usage_credits')}
         </div>
       </div>
     </li>

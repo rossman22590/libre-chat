@@ -9,9 +9,6 @@ export const REFILL_INTERVAL_UNITS = [
 
 export type RefillIntervalUnit = (typeof REFILL_INTERVAL_UNITS)[number];
 
-/** 1,000,000 token credits = $1.00 USD */
-export const CREDITS_PER_USD = 1_000_000;
-
 export const USAGE_PERIOD_DAYS = [1, 7, 30, 90] as const;
 
 function ensureExhaustive(value: never): void {

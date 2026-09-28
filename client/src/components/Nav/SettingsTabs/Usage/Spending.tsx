@@ -2,7 +2,7 @@ import { Skeleton } from '@librechat/client';
 import { USAGE_PERIOD_DAYS } from 'librechat-data-provider';
 import type { TUsagePeriodDays, TUsageGrant } from 'librechat-data-provider';
 import type { TranslationKeys } from '~/hooks';
-import { formatCompact, formatUsd, formatWhole } from './format';
+import { formatCompact, formatWhole } from './format';
 import { useUsageSummaryQuery } from '~/data-provider';
 import { useUsagePeriod } from './hooks';
 import { useLocalize } from '~/hooks';
@@ -142,6 +142,8 @@ export default function Spending() {
 
   const { totals, grants, series, since, granularity } = data;
   const totalTokens = totals.inputTokens + totals.outputTokens;
+  const perMessage = totals.messageCount > 0 ? totals.spentCredits / totals.messageCount : 0;
+  const grantCount = grants.reduce((sum, g) => sum + g.count, 0);
 
   return (
     <div className="space-y-4">
@@ -150,12 +152,12 @@ export default function Spending() {
         <Tile
           label={localize('com_nav_usage_spent')}
           value={formatCompact(totals.spentCredits)}
-          detail={formatUsd(totals.spentCredits)}
+          detail={localize('com_nav_usage_avg_per_message', { 0: formatCompact(perMessage) })}
         />
         <Tile
           label={localize('com_nav_usage_added')}
           value={`+${formatCompact(totals.addedCredits)}`}
-          detail={formatUsd(totals.addedCredits)}
+          detail={localize('com_nav_usage_grant_count', { 0: grantCount })}
           tone={totals.addedCredits > 0 ? 'success' : 'default'}
         />
         <Tile

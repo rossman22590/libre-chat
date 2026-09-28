@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Skeleton } from '@librechat/client';
-import { formatCompact, formatRelative, formatUsd, splitModel } from './format';
+import { formatCompact, formatRelative, splitModel } from './format';
 import { useUsageSummaryQuery } from '~/data-provider';
 import { PERIOD_LABELS } from './Spending';
 import { useUsagePeriod } from './hooks';
@@ -61,7 +61,7 @@ export default function Chats() {
               <div className="font-medium text-text-primary">
                 {formatCompact(chat.spentCredits)}
               </div>
-              <div className="text-xs text-text-secondary">{formatUsd(chat.spentCredits)}</div>
+              <div className="text-xs text-text-secondary">{localize('com_nav_usage_credits')}</div>
             </div>
           </Link>
         </li>

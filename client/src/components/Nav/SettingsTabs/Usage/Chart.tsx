@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { TUsageSeriesPoint } from 'librechat-data-provider';
-import { formatCompact, formatUsd, formatWhole } from './format';
+import { formatCompact, formatWhole } from './format';
 import { useLocalize, useClockFormat } from '~/hooks';
 
 interface ChartProps {
@@ -89,7 +89,7 @@ export default function Chart({ series, since, granularity }: ChartProps) {
             <div className="text-text-secondary">{formatBucket(focused.date)}</div>
             <div className="tabular-nums text-text-primary">
               <span className="font-medium">{formatWhole(focused.spentCredits)}</span>{' '}
-              {localize('com_nav_usage_credits_spent')} · {formatUsd(focused.spentCredits)}
+              {localize('com_nav_usage_credits_spent')}
               {focused.addedCredits > 0 && (
                 <span className="text-status-success">
                   {' · '}+{formatCompact(focused.addedCredits)} {localize('com_nav_usage_added')}

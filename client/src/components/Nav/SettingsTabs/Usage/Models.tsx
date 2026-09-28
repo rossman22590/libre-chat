@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Skeleton } from '@librechat/client';
 import type { TUsageModelStat } from 'librechat-data-provider';
-import { formatCompact, formatRelative, formatUsd, percentOf, splitModel } from './format';
+import { formatCompact, formatRelative, percentOf, splitModel } from './format';
 import { useUsageSummaryQuery } from '~/data-provider';
 import { PERIOD_LABELS } from './Spending';
 import { useUsagePeriod } from './hooks';
@@ -64,10 +64,7 @@ function ModelRow({ stat, index, share, isMostUsed }: ModelRowProps) {
           })}
         </div>
         <div className="text-xs tabular-nums text-text-secondary">
-          {localize('com_nav_usage_per_message', {
-            0: formatCompact(perMessage),
-            1: formatUsd(perMessage),
-          })}
+          {localize('com_nav_usage_per_message', { 0: formatCompact(perMessage) })}
           {' · '}
           {localize('com_nav_usage_last_used', { 0: formatRelative(stat.lastUsedAt) })}
         </div>
@@ -75,7 +72,7 @@ function ModelRow({ stat, index, share, isMostUsed }: ModelRowProps) {
       <div className="shrink-0 text-right tabular-nums">
         <div className="font-medium text-text-primary">{formatCompact(stat.spentCredits)}</div>
         <div className="text-xs text-text-secondary">
-          {formatUsd(stat.spentCredits)} · {Math.round(share)}%
+          {localize('com_nav_usage_share', { 0: Math.round(share) })}
         </div>
       </div>
     </li>

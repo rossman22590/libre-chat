@@ -1,5 +1,3 @@
-import { CREDITS_PER_USD } from 'librechat-data-provider';
-
 const compact = new Intl.NumberFormat(undefined, {
   notation: 'compact',
   maximumFractionDigits: 1,
@@ -18,21 +16,6 @@ const RELATIVE_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
 export const formatCompact = (value: number): string => compact.format(Math.round(value));
 
 export const formatWhole = (value: number): string => whole.format(value);
-
-/** Dollar value of a credit amount, keeping sub-cent spend visible instead of rounding to $0.00 */
-export function formatUsd(credits: number): string {
-  const usd = credits / CREDITS_PER_USD;
-  if (usd === 0) {
-    return '$0.00';
-  }
-  if (usd < 0.01) {
-    return `$${usd.toFixed(usd < 0.0001 ? 6 : 4)}`;
-  }
-  return `$${usd.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
 
 export function formatRelative(iso: string, now: number = Date.now()): string {
   const seconds = (new Date(iso).getTime() - now) / 1000;
