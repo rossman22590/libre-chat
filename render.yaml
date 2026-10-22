@@ -1,0 +1,187 @@
+# Render Blueprint for LibreChat: app + RAG API + Meilisearch + VectorDB (pgvector).
+# Deploy: https://dashboard.render.com/blueprint/new?repo=https://github.com/rossman22590/libre-chat
+#
+# MongoDB is not hosted here; keep using your existing MongoDB (e.g. Atlas) URI for MONGO_URI.
+# Values marked `sync: false` are prompted for when the Blueprint is created. Leave MEILI_HOST and
+# RAG_API_URL blank on the first deploy, then fill them in from the private services' internal
+# addresses (shown on each service's page, e.g. http://meilisearch-abcd:7700).
+
+services:
+  - type: web
+    name: librechat
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    branch: aug-2026-update
+    # The backend plus agents needs more than the 512 MB Starter/Free instances provide.
+    plan: standard
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 3080
+      - key: TRUST_PROXY
+        value: 1
+      - key: NO_INDEX
+        value: true
+      # .dockerignore keeps librechat.yaml out of the image, so load it from the repo instead.
+      - key: CONFIG_PATH
+        value: https://raw.githubusercontent.com/rossman22590/libre-chat/aug-2026-update/librechat.yaml
+
+      # Required
+      - key: MONGO_URI
+        sync: false
+      # Your Render URL, e.g. https://librechat-xxxx.onrender.com (no trailing slash)
+      - key: DOMAIN_CLIENT
+        sync: false
+      - key: DOMAIN_SERVER
+        sync: false
+      # Must be hex: `openssl rand -hex 32` for the key, `openssl rand -hex 16` for the IV
+      - key: CREDS_KEY
+        sync: false
+      - key: CREDS_IV
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+      # Auth
+      - key: ALLOW_EMAIL_LOGIN
+        value: true
+      - key: ALLOW_REGISTRATION
+        value: true
+      - key: ALLOW_UNVERIFIED_EMAIL_LOGIN
+        value: true
+
+      # Meilisearch (conversation search)
+      - key: SEARCH
+        value: true
+      - key: MEILI_NO_ANALYTICS
+        value: true
+      - key: MEILI_HOST
+        sync: false
+      - key: MEILI_MASTER_KEY
+        fromService:
+          type: pserv
+          name: meilisearch
+          envVarKey: MEILI_MASTER_KEY
+
+      # RAG API (file search / chat with files)
+      - key: RAG_API_URL
+        sync: false
+
+      # librechat.yaml uses fileStrategy: firebase
+      - key: FIREBASE_API_KEY
+        sync: false
+      - key: FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: FIREBASE_APP_ID
+        sync: false
+
+      # Providers referenced by librechat.yaml
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_KEY
+        sync: false
+      - key: OPENROUTER_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: MINIMAX_API_KEY
+        sync: false
+      - key: SERPER_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: JINA_API_KEY
+        sync: false
+      - key: COHERE_API_KEY
+        sync: false
+      - key: TTS_API_KEY
+        sync: false
+      - key: STT_API_KEY
+        sync: false
+
+  - type: pserv
+    name: rag-api
+    runtime: image
+    image:
+      url: registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:latest
+    plan: starter
+    envVars:
+      - key: RAG_HOST
+        value: 0.0.0.0
+      - key: RAG_PORT
+        value: 8000
+      # Must match LibreChat's so the RAG API accepts its tokens.
+      - key: JWT_SECRET
+        fromService:
+          type: web
+          name: librechat
+          envVarKey: JWT_SECRET
+      - key: DB_HOST
+        fromDatabase:
+          name: vectordb
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: vectordb
+          property: port
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: vectordb
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: vectordb
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: vectordb
+          property: password
+      - key: EMBEDDINGS_PROVIDER
+        value: openai
+      - key: EMBEDDINGS_MODEL
+        value: text-embedding-3-small
+      - key: RAG_OPENAI_API_KEY
+        sync: false
+
+  - type: pserv
+    name: meilisearch
+    runtime: image
+    image:
+      url: getmeili/meilisearch:v1.35.1
+    plan: starter
+    disk:
+      name: meili-data
+      mountPath: /meili_data
+      sizeGB: 1
+    envVars:
+      - key: MEILI_HTTP_ADDR
+        value: 0.0.0.0:7700
+      - key: MEILI_NO_ANALYTICS
+        value: true
+      - key: MEILI_ENV
+        value: production
+      - key: MEILI_MASTER_KEY
+        generateValue: true
+
+databases:
+  # Render Postgres ships the pgvector extension, which the RAG API enables on first start.
+  - name: vectordb
+    plan: basic-256mb
+    databaseName: vectordb
+    user: rag
