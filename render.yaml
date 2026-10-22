@@ -167,11 +167,12 @@ services:
     runtime: image
     image:
       url: getmeili/meilisearch:v1.35.1
-    plan: starter
+    # Indexing ~100k messages needs more than Starter's 512 MB and a 1 GB disk.
+    plan: standard
     disk:
       name: meili-data
       mountPath: /meili_data
-      sizeGB: 1
+      sizeGB: 5
     envVars:
       - key: MEILI_HTTP_ADDR
         value: 0.0.0.0:7700
@@ -179,6 +180,11 @@ services:
         value: true
       - key: MEILI_ENV
         value: production
+      # Meilisearch sizes indexing memory from the host, not the instance, and OOMs on bulk syncs.
+      - key: MEILI_MAX_INDEXING_MEMORY
+        value: 1Gb
+      - key: MEILI_MAX_INDEXING_THREADS
+        value: 2
       - key: MEILI_MASTER_KEY
         generateValue: true
 
