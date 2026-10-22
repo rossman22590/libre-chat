@@ -106,8 +106,8 @@ services:
     runtime: image
     image:
       url: getmeili/meilisearch:v1.35.1
-    # Standard for the first full index of an existing database; drop to starter once it finishes.
-    plan: standard
+    # Starter handles day-to-day indexing; bump to standard temporarily for a full re-index.
+    plan: starter
     disk:
       name: meili-data-ultras
       mountPath: /meili_data
@@ -121,9 +121,9 @@ services:
         value: production
       # Meilisearch sizes indexing memory from the host, not the instance, and OOMs on bulk syncs.
       - key: MEILI_MAX_INDEXING_MEMORY
-        value: 1Gb
+        value: 200Mb
       - key: MEILI_MAX_INDEXING_THREADS
-        value: 2
+        value: 1
       - key: MEILI_MASTER_KEY
         generateValue: true
 
