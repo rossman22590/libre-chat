@@ -1,0 +1,135 @@
+# Render Blueprint for Multibot Ultras: a second copy of the Multibot stack (app + RAG API +
+# Meilisearch + pgvector) built from aug-2026-update-resets against its own MongoDB.
+# Create it as a new Blueprint with Blueprint Path `render-ultras.yaml`.
+#
+# Only MONGO_URI, CREDS_KEY and CREDS_IV are prompted for. Provider keys, Firebase, Code Interpreter
+# and the remaining secrets are copied from the Multibot Premium librechat service after creation,
+# and MEILI_HOST / RAG_API_URL / DOMAIN_* are set once Render assigns the private addresses and URL.
+
+services:
+  - type: web
+    name: librechat-ultras
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    branch: aug-2026-update-resets
+    plan: standard
+    healthCheckPath: /health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PORT
+        value: 3080
+      - key: TRUST_PROXY
+        value: 1
+      - key: NO_INDEX
+        value: true
+      # No Redis here, so the scheduler only arms once told this is the sole replica.
+      - key: SCHEDULES_SINGLE_PROCESS
+        value: true
+      # .dockerignore keeps librechat.yaml out of the image, so load it from the repo instead.
+      - key: CONFIG_PATH
+        value: https://raw.githubusercontent.com/rossman22590/libre-chat/aug-2026-update-resets/librechat.yaml
+
+      - key: MONGO_URI
+        sync: false
+      # Must be hex: `openssl rand -hex 32` for the key, `openssl rand -hex 16` for the IV
+      - key: CREDS_KEY
+        sync: false
+      - key: CREDS_IV
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+
+      - key: ALLOW_EMAIL_LOGIN
+        value: true
+      - key: ALLOW_REGISTRATION
+        value: true
+      - key: ALLOW_UNVERIFIED_EMAIL_LOGIN
+        value: true
+
+      - key: SEARCH
+        value: true
+      - key: MEILI_NO_ANALYTICS
+        value: true
+      - key: MEILI_MASTER_KEY
+        fromService:
+          type: pserv
+          name: meilisearch-ultras
+          envVarKey: MEILI_MASTER_KEY
+
+  - type: pserv
+    name: rag-api-ultras
+    runtime: image
+    image:
+      url: registry.librechat.ai/danny-avila/librechat-rag-api-dev-lite:latest
+    plan: starter
+    envVars:
+      - key: RAG_HOST
+        value: 0.0.0.0
+      - key: RAG_PORT
+        value: 8000
+      # Must match LibreChat's so the RAG API accepts its tokens.
+      - key: JWT_SECRET
+        fromService:
+          type: web
+          name: librechat-ultras
+          envVarKey: JWT_SECRET
+      - key: DB_HOST
+        fromDatabase:
+          name: vectordb-ultras
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: vectordb-ultras
+          property: port
+      - key: POSTGRES_DB
+        fromDatabase:
+          name: vectordb-ultras
+          property: database
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: vectordb-ultras
+          property: user
+      - key: POSTGRES_PASSWORD
+        fromDatabase:
+          name: vectordb-ultras
+          property: password
+      - key: EMBEDDINGS_PROVIDER
+        value: openai
+      - key: EMBEDDINGS_MODEL
+        value: text-embedding-3-small
+
+  - type: pserv
+    name: meilisearch-ultras
+    runtime: image
+    image:
+      url: getmeili/meilisearch:v1.35.1
+    # Standard for the first full index of an existing database; drop to starter once it finishes.
+    plan: standard
+    disk:
+      name: meili-data-ultras
+      mountPath: /meili_data
+      sizeGB: 5
+    envVars:
+      - key: MEILI_HTTP_ADDR
+        value: 0.0.0.0:7700
+      - key: MEILI_NO_ANALYTICS
+        value: true
+      - key: MEILI_ENV
+        value: production
+      # Meilisearch sizes indexing memory from the host, not the instance, and OOMs on bulk syncs.
+      - key: MEILI_MAX_INDEXING_MEMORY
+        value: 1Gb
+      - key: MEILI_MAX_INDEXING_THREADS
+        value: 2
+      - key: MEILI_MASTER_KEY
+        generateValue: true
+
+databases:
+  # Render Postgres ships the pgvector extension, which the RAG API enables on first start.
+  - name: vectordb-ultras
+    plan: basic-256mb
+    databaseName: vectordb
+    user: rag
