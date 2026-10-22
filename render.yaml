@@ -24,6 +24,9 @@ services:
         value: 1
       - key: NO_INDEX
         value: true
+      # No Redis here, so the scheduler only arms once told this is the sole replica.
+      - key: SCHEDULES_SINGLE_PROCESS
+        value: true
       # .dockerignore keeps librechat.yaml out of the image, so load it from the repo instead.
       - key: CONFIG_PATH
         value: https://raw.githubusercontent.com/rossman22590/libre-chat/aug-2026-update/librechat.yaml
