@@ -165,4 +165,9 @@ const checkBan = async (req, res, next = () => {}) => {
   }
 };
 
+/** Drops a user's cached ban so an unban takes effect before the cached entry expires. */
+const clearUserBanCache = (userId) =>
+  banCache.delete(getBanCacheKey('user', userId, isEnabled(process.env.USE_REDIS)));
+
 module.exports = checkBan;
+module.exports.clearUserBanCache = clearUserBanCache;

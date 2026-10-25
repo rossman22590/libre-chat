@@ -59,6 +59,7 @@ router.post(
 );
 router.post('/:userId/ban', requireManageUsers, adminUsersController.banUser);
 router.delete('/:userId/ban', requireManageUsers, adminUsersController.unbanUser);
+router.delete('/:userId', requireManageUsers, adminUsersController.deleteUser);
 router.get('/:userId/conversations', requireReadUsers, adminUsersController.getUserConversations);
 router.get(
   '/:userId/conversations/:conversationId/messages',

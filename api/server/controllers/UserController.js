@@ -367,29 +367,19 @@ const updateUserPluginsController = async (req, res) => {
   }
 };
 
-const deleteUserController = async (req, res) => {
+/**
+ * Cascades deletion of everything `req.user` owns, then the user document itself.
+ * On failure, restores this attempt's suspended schedules and releases the trigger
+ * deletion fence before rethrowing, so the surviving account stays fully usable.
+ * @param {ServerRequest} req - Request whose `user` (with `id`, `_id`, `tenantId`) is deleted.
+ */
+const deleteUserAccount = async (req) => {
   const { user } = req;
   let triggerDeletionFence;
   let scheduleSuspensionToken;
   let userDeleted = false;
 
   try {
-    const existingUser = await db.getUserById(
-      user.id,
-      '+totpSecret +backupCodes _id twoFactorEnabled',
-    );
-    if (existingUser && existingUser.twoFactorEnabled) {
-      const { token, backupCode } = req.body;
-      const result = await verifyOTPOrBackupCode({ user: existingUser, token, backupCode });
-
-      if (!result.verified) {
-        const msg =
-          result.message ??
-          'TOTP token or backup code is required to delete account with 2FA enabled';
-        return res.status(result.status ?? 400).json({ message: msg });
-      }
-    }
-
     // Block new trigger admissions across replicas while preserving the user
     // principal so a transient cleanup failure remains retryable.
     triggerDeletionFence = new Date();
@@ -476,8 +466,6 @@ const deleteUserController = async (req, res) => {
     }
     userDeleted = true;
     await purgeAgentTriggerDeliveriesForUser(user.id);
-    logger.info(`User deleted account. Email: ${user.email} ID: ${user.id}`);
-    res.status(200).send({ message: 'User deleted' });
   } catch (err) {
     // The account survives this failed attempt, so its schedules must too: restore the
     // exact rows this attempt suspended (re-enabled/re-armed from their snapshot). Fenced
@@ -521,6 +509,34 @@ const deleteUserController = async (req, res) => {
         logger.error('[deleteUserController] Failed to release trigger deletion fence', fenceError);
       }
     }
+    throw err;
+  }
+};
+
+const deleteUserController = async (req, res) => {
+  const { user } = req;
+
+  try {
+    const existingUser = await db.getUserById(
+      user.id,
+      '+totpSecret +backupCodes _id twoFactorEnabled',
+    );
+    if (existingUser && existingUser.twoFactorEnabled) {
+      const { token, backupCode } = req.body;
+      const result = await verifyOTPOrBackupCode({ user: existingUser, token, backupCode });
+
+      if (!result.verified) {
+        const msg =
+          result.message ??
+          'TOTP token or backup code is required to delete account with 2FA enabled';
+        return res.status(result.status ?? 400).json({ message: msg });
+      }
+    }
+
+    await deleteUserAccount(req);
+    logger.info(`User deleted account. Email: ${user.email} ID: ${user.id}`);
+    res.status(200).send({ message: 'User deleted' });
+  } catch (err) {
     logger.error('[deleteUserController]', err);
     return res.status(500).json({ message: 'Something went wrong.' });
   }
@@ -760,6 +776,7 @@ module.exports = {
   getUserController,
   getTermsStatusController,
   acceptTermsController,
+  deleteUserAccount,
   deleteUserController,
   verifyEmailController,
   updateUserPluginsController,

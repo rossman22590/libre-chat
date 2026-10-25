@@ -95,6 +95,7 @@ export const adminUserBalanceAdd = (userId: string) =>
 export const adminUsersResetsGrantAll = () => `${adminUsersRoot()}/resets/grant-all`;
 export const adminUserResets = (userId: string) =>
   `${adminUsersRoot()}/${encodeURIComponent(userId)}/resets`;
+export const adminUser = (userId: string) => `${adminUsersRoot()}/${encodeURIComponent(userId)}`;
 export const adminUserBan = (userId: string) =>
   `${adminUsersRoot()}/${encodeURIComponent(userId)}/ban`;
 export const adminUserTransactions = (userId: string, params?: { limit?: number }) => {

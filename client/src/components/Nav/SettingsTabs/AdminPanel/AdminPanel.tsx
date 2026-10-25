@@ -16,6 +16,7 @@ import {
   useGetAdminUserTransactions,
 } from '~/data-provider';
 import { useLocalize, type TranslationKeys } from '~/hooks';
+import Moderation from './Moderation';
 
 const PAGE_SIZE = 20;
 const MESSAGE_PREVIEW_CHARS = 1200;
@@ -748,8 +749,13 @@ const AdminPanel: React.FC = () => {
             <div className="border-border-subtle flex shrink-0 flex-col gap-2 border-b px-4 py-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="font-medium text-text-primary">
+                  <h3 className="flex items-center gap-2 font-medium text-text-primary">
                     {selectedUser.name ?? selectedUser.username ?? selectedUser.email ?? '—'}
+                    {selectedUser.isBanned && (
+                      <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                        {localize('com_nav_admin_banned_badge')}
+                      </span>
+                    )}
                   </h3>
                   <p className="text-token-text-secondary text-xs">{selectedUser.email}</p>
                   <p className="text-token-text-secondary mt-1 text-xs">
@@ -843,6 +849,15 @@ const AdminPanel: React.FC = () => {
                   {localize('com_nav_admin_grant_resets')}
                 </Button>
               </div>
+              <Moderation
+                key={selectedUser._id}
+                user={selectedUser}
+                onBanChange={(isBanned) => setSelectedUser((u) => (u ? { ...u, isBanned } : null))}
+                onDeleted={() => {
+                  handleCloseUserDetail();
+                  refetchStats();
+                }}
+              />
             </div>
             <div className="border-border-subtle flex shrink-0 overflow-x-auto border-b">
               <button

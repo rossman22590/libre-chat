@@ -85,3 +85,13 @@ export const useUnbanAdminUserMutation = () => {
     },
   });
 };
+
+export const useDeleteAdminUserMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation((userId: string) => dataService.deleteAdminUser(userId), {
+    onSuccess: () => {
+      queryClient.invalidateQueries([QueryKeys.adminUsers]);
+      queryClient.invalidateQueries([QueryKeys.adminStats]);
+    },
+  });
+};

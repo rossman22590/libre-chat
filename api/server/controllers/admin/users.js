@@ -1,8 +1,19 @@
-const { User, Balance, Conversation, Message, Transaction } = require('~/db/models');
-const getLogStores = require('~/cache/getLogStores');
-const { ViolationTypes } = require('librechat-data-provider');
 const mongoose = require('mongoose');
+const { logger } = require('@librechat/data-schemas');
+const {
+  isEnabled,
+  invalidateCachedAuthUserDoc,
+  getAppConfigOptionsFromUser,
+} = require('@librechat/api');
+const { CacheKeys, SystemRoles, ViolationTypes } = require('librechat-data-provider');
+const { User, Balance, Conversation, Message, Transaction } = require('~/db/models');
+const { deleteUserAccount } = require('~/server/controllers/UserController');
+const { clearUserBanCache } = require('~/server/middleware/checkBan');
+const { getAppConfig } = require('~/server/services/Config');
+const getLogStores = require('~/cache/getLogStores');
+const db = require('~/models');
 
+const MAX_BAN_MINUTES = 100 * 365 * 24 * 60;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 const TRANSACTIONS_DAYS = 40;
@@ -95,6 +106,7 @@ async function listUsers(req, res) {
 
     const userObjectIds = users.map((u) => u._id);
     const userStringIds = users.map((u) => u._id.toString());
+    const pageBans = sortByJoinedField ? null : getBannedUserIds(userStringIds);
     const [balances, conversationCounts] = await Promise.all([
       Balance.find({ user: { $in: userObjectIds } })
         .select('user tokenCredits bonusResets')
@@ -138,8 +150,10 @@ async function listUsers(req, res) {
       items = items.slice(skip, skip + pageSize);
     }
 
+    const bannedIds = await (pageBans ?? getBannedUserIds(items.map((item) => item._id)));
+
     res.status(200).json({
-      users: items,
+      users: items.map((item) => ({ ...item, isBanned: bannedIds.has(item._id) })),
       total,
       page,
       pageSize,
@@ -151,6 +165,49 @@ async function listUsers(req, res) {
 
 function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Mirrors `checkBan`: an entry without `expiresAt` is banned until removed. */
+function isActiveBan(entry, now) {
+  if (!entry) {
+    return false;
+  }
+  const expiresAt = Number(entry.expiresAt);
+  return !entry.expiresAt || isNaN(expiresAt) || expiresAt > now;
+}
+
+async function getBannedUserIds(userIds) {
+  if (userIds.length === 0) {
+    return new Set();
+  }
+  try {
+    const entries = await getLogStores(ViolationTypes.BAN).getMany(userIds);
+    const now = Date.now();
+    return new Set(userIds.filter((_, i) => isActiveBan(entries[i], now)));
+  } catch (error) {
+    logger.warn('[admin/users] Failed to read ban states:', error);
+    return new Set();
+  }
+}
+
+/** Rejects self-targeting and malformed ids; returns the target user or sends the error. */
+async function resolveTargetUser(req, res, action) {
+  const { userId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
+    res.status(400).json({ error: 'Invalid user ID format' });
+    return null;
+  }
+  const callerId = req.user?._id?.toString() ?? req.user?.id;
+  if (callerId === userId) {
+    res.status(403).json({ error: `Cannot ${action} your own account` });
+    return null;
+  }
+  const user = await db.getUserById(userId, '_id email role tenantId');
+  if (!user) {
+    res.status(404).json({ error: 'User not found' });
+    return null;
+  }
+  return user;
 }
 
 async function setUserBalance(req, res) {
@@ -199,25 +256,36 @@ async function setAllUsersBalance(req, res) {
 
 async function banUser(req, res) {
   try {
-    const { userId } = req.params;
     const durationMinutes = parseInt(req.body?.durationMinutes, 10);
-    if (durationMinutes == null || isNaN(durationMinutes) || durationMinutes <= 0) {
+    if (isNaN(durationMinutes) || durationMinutes <= 0) {
       return res.status(400).json({ error: 'Valid durationMinutes is required' });
     }
+    if (!isEnabled(process.env.BAN_VIOLATIONS)) {
+      return res
+        .status(409)
+        .json({ error: 'Bans are not enforced: set BAN_VIOLATIONS=true on the server' });
+    }
 
-    const duration = durationMinutes * 60 * 1000;
-    const banLogs = getLogStores(ViolationTypes.BAN);
+    const user = await resolveTargetUser(req, res, 'ban');
+    if (!user) {
+      return;
+    }
+
+    const userId = user._id.toString();
+    const duration = Math.min(durationMinutes, MAX_BAN_MINUTES) * 60 * 1000;
     const expiresAt = Date.now() + duration;
 
-    await banLogs.set(userId, {
-      type: ViolationTypes.BAN,
-      violation_count: 0,
+    await getLogStores(ViolationTypes.BAN).set(
+      userId,
+      { type: ViolationTypes.BAN, violation_count: 0, duration, expiresAt },
       duration,
-      expiresAt,
-    });
+    );
+    await db.deleteAllUserSessions({ userId });
+    logger.info(`[admin/users] ${req.user?.email} banned user ${user.email} until ${expiresAt}`);
 
     res.status(200).json({ banned: true, expiresAt });
-  } catch {
+  } catch (error) {
+    logger.error('[admin/users] banUser error:', error);
     res.status(500).json({ error: 'Failed to ban user' });
   }
 }
@@ -225,11 +293,44 @@ async function banUser(req, res) {
 async function unbanUser(req, res) {
   try {
     const { userId } = req.params;
-    const banLogs = getLogStores(ViolationTypes.BAN);
-    await banLogs.delete(userId);
+    await Promise.all([getLogStores(ViolationTypes.BAN).delete(userId), clearUserBanCache(userId)]);
     res.status(200).json({ banned: false });
-  } catch {
+  } catch (error) {
+    logger.error('[admin/users] unbanUser error:', error);
     res.status(500).json({ error: 'Failed to unban user' });
+  }
+}
+
+async function deleteUser(req, res) {
+  try {
+    const target = await resolveTargetUser(req, res, 'delete');
+    if (!target) {
+      return;
+    }
+
+    if (target.role === SystemRoles.ADMIN) {
+      const adminCount = await User.countDocuments({ role: SystemRoles.ADMIN });
+      if (adminCount <= 1) {
+        return res.status(400).json({ error: 'Cannot delete the last admin user' });
+      }
+    }
+
+    const userId = target._id.toString();
+    const user = { ...target, id: userId };
+    const config = await getAppConfig(getAppConfigOptionsFromUser(user));
+    await deleteUserAccount({ user, config, body: {} });
+
+    await Promise.allSettled([
+      getLogStores(ViolationTypes.BAN).delete(userId),
+      clearUserBanCache(userId),
+      invalidateCachedAuthUserDoc(getLogStores(CacheKeys.AUTH_USER_DOC), { userId }),
+    ]);
+    logger.info(`[admin/users] ${req.user?.email} deleted user ${target.email} (${userId})`);
+
+    res.status(200).json({ deleted: true });
+  } catch (error) {
+    logger.error('[admin/users] deleteUser error:', error);
+    res.status(500).json({ error: 'Failed to delete user' });
   }
 }
 
@@ -521,6 +622,7 @@ module.exports = {
   addUserBalance,
   banUser,
   unbanUser,
+  deleteUser,
   getUserConversations,
   getConversationMessages,
   getUserTransactions,

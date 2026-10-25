@@ -286,6 +286,10 @@ export function unbanAdminUser(userId: string): Promise<{ banned: boolean }> {
   return request.delete(endpoints.adminUserBan(userId));
 }
 
+export function deleteAdminUser(userId: string): Promise<{ deleted: boolean }> {
+  return request.delete(endpoints.adminUser(userId));
+}
+
 export function getAdminUserConversations(
   userId: string,
   params?: { cursor?: string; limit?: number; sortBy?: string; sortDirection?: string },
