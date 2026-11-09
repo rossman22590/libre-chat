@@ -27,6 +27,8 @@ export default function useGetSender() {
         modelLabel: endpointOption.modelLabel,
         specLabel: modelSpec?.label,
         modelDisplayLabel,
+        endpoint: endpointOption.endpoint,
+        model: endpointOption.model,
       });
       return sender || getResponseSender({ ...endpointOption, modelDisplayLabel });
     },

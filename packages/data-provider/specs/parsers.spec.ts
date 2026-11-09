@@ -890,6 +890,34 @@ describe('getEphemeralSender', () => {
   test('an empty-string modelLabel short-circuits the chain', () => {
     expect(getEphemeralSender({ modelLabel: '', specLabel: 'Spec Label' })).toBe('');
   });
+
+  describe('OpenRouter endpoints', () => {
+    const model = 'anthropic/claude-fable-5.2';
+
+    test('names the routed model instead of the endpoint label', () => {
+      expect(
+        getEphemeralSender({ modelDisplayLabel: 'OpenRouter', endpoint: 'OpenRouter', model }),
+      ).toBe(model);
+    });
+
+    test('still prefers an explicit model label or spec label', () => {
+      const base = { modelDisplayLabel: 'OpenRouter', endpoint: 'OpenRouter', model };
+      expect(getEphemeralSender({ ...base, modelLabel: 'My Bot' })).toBe('My Bot');
+      expect(getEphemeralSender({ ...base, specLabel: 'Spec Label' })).toBe('Spec Label');
+    });
+
+    test('keeps the endpoint label when no model is known', () => {
+      expect(getEphemeralSender({ modelDisplayLabel: 'OpenRouter', endpoint: 'OpenRouter' })).toBe(
+        'OpenRouter',
+      );
+    });
+
+    test('leaves other endpoints on their display label', () => {
+      expect(
+        getEphemeralSender({ modelDisplayLabel: 'groq', endpoint: 'groq', model: 'llama-4' }),
+      ).toBe('groq');
+    });
+  });
 });
 
 describe('isConfiguredSender', () => {

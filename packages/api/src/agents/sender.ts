@@ -30,6 +30,8 @@ export function resolveSender({
       modelLabel: endpointOption.modelLabel,
       specLabel,
       modelDisplayLabel: endpointOption.modelDisplayLabel,
+      endpoint: endpointOption.endpoint,
+      model: endpointOption.model,
     });
     if (sender) {
       return sender;

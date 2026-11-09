@@ -173,6 +173,8 @@ export async function loadAddedAgent(
       modelLabel: rest.modelLabel,
       specLabel: modelSpec?.label,
       modelDisplayLabel: endpointConfig?.modelDisplayLabel as string | undefined,
+      endpoint,
+      model,
     });
     const ephemeralId = encodeEphemeralAgentId({ endpoint, model, sender, index: 1 });
 
@@ -302,6 +304,8 @@ export async function loadAddedAgent(
     modelLabel: rest.modelLabel,
     specLabel: modelSpec?.label,
     modelDisplayLabel: endpointConfig?.modelDisplayLabel as string | undefined,
+    endpoint,
+    model,
   });
   const ephemeralId = encodeEphemeralAgentId({ endpoint, model, sender, index: 1 });
 
