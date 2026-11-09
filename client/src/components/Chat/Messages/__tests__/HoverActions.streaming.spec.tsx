@@ -1,13 +1,16 @@
 import React, { useMemo } from 'react';
+import { getDefaultStore } from 'jotai';
 import { MemoryRouter } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import { RecoilRoot, type MutableSnapshot } from 'recoil';
 import { render, screen, act } from '@testing-library/react';
+import { isSubmittingFamily, resetSubmitting } from '@librechat/chat/react';
 import { QueryKeys, type TConversation, type TMessage } from 'librechat-data-provider';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { useLatestMessage, useLatestMessageId } from '~/hooks/Messages/useLatestMessage';
 import { ChatContext, MessagesViewProvider, useChatContext } from '~/Providers';
 import StructuredMessage from '~/components/Messages/MessageContent';
+import MessageParts from '~/components/Chat/Messages/MessageParts';
 import Message from '~/components/Chat/Messages/Message';
 import store from '~/store';
 
@@ -30,17 +33,25 @@ jest.mock('~/components/Chat/Messages/Content/MessageContent', () => ({
   },
 }));
 
-jest.mock('~/components/Chat/Messages/Content/ContentParts', () => ({
-  __esModule: true,
-  default: ({ content }: { content?: TMessage['content'] }) => {
-    mockContentRenderCount += 1;
-    return <div data-testid="structured-message-content">{JSON.stringify(content ?? [])}</div>;
-  },
-}));
+jest.mock('~/components/Chat/Messages/Content/ContentParts', () => {
+  const { useErrorSource } = jest.requireActual('~/components/Messages/Content/Error/source');
+  return {
+    __esModule: true,
+    default: function ContentParts({ content }: { content?: TMessage['content'] }) {
+      mockContentRenderCount += 1;
+      const errorSource = useErrorSource();
+      return (
+        <div data-testid="structured-message-content" data-error-source-model={errorSource?.model}>
+          {JSON.stringify(content ?? [])}
+        </div>
+      );
+    },
+  };
+});
 
-jest.mock('~/components/Chat/Messages/Content/Parts/AuthorHeader', () => ({
-  __esModule: true,
-  default: () => <div data-testid="author-header" />,
+jest.mock('@librechat/chat/components', () => ({
+  ...jest.requireActual('@librechat/chat/components'),
+  AuthorHeader: () => <div data-testid="author-header" />,
 }));
 
 jest.mock('~/components/Chat/Messages/MessageIcon', () => ({
@@ -48,13 +59,20 @@ jest.mock('~/components/Chat/Messages/MessageIcon', () => ({
   default: () => <div data-testid="message-icon" />,
 }));
 
+jest.mock('@librechat/client', () => ({
+  ...jest.requireActual('@librechat/client'),
+  useLocalize: () => (key: string) => key,
+}));
+
 jest.mock('~/hooks', () => {
   const useMessageProcess = jest.requireActual('~/hooks/Messages/useMessageProcess').default;
   const useMemoizedChatContext = jest.requireActual(
     '~/hooks/Messages/useMemoizedChatContext',
   ).default;
+  const useMessageHelpers = jest.requireActual('~/hooks/Messages/useMessageHelpers').default;
   return {
     useMessageProcess,
+    useMessageHelpers,
     useMemoizedChatContext,
     useContentMetadata: () => ({ hasParallelContent: false }),
     useAttachments: () => ({ attachments: [], searchResults: undefined }),
@@ -140,14 +158,18 @@ function createQueryClient() {
   });
 }
 
+type RowComponent = typeof Message;
+
 function DerivedStreamingRow({
   structured = false,
   submitting = true,
   siblingIdx = 1,
+  row,
 }: {
   structured?: boolean;
   submitting?: boolean;
   siblingIdx?: number;
+  row?: RowComponent;
 }) {
   const queryClient = useQueryClient();
   const latestMessage = useLatestMessage(0);
@@ -183,7 +205,7 @@ function DerivedStreamingRow({
     return null;
   }
 
-  const MessageComponent = structured ? StructuredMessage : Message;
+  const MessageComponent = row ?? (structured ? StructuredMessage : Message);
   return (
     <ChatContext.Provider value={chatContext}>
       <MessagesViewProvider>
@@ -200,16 +222,26 @@ function DerivedStreamingRow({
   );
 }
 
-function renderStreamingRow(structured = false, submitting = true, siblingIdx = 1) {
+function renderStreamingRow(
+  structured = false,
+  submitting = true,
+  siblingIdx = 1,
+  row?: RowComponent,
+  assistantMessage?: TMessage,
+) {
   const queryClient = createQueryClient();
   queryClient.setQueryData<TMessage[]>(
     [QueryKeys.messages, conversation.conversationId],
-    [userMessage, structured ? optimisticStructuredAssistantMessage : optimisticAssistantMessage],
+    [
+      userMessage,
+      assistantMessage ??
+        (structured ? optimisticStructuredAssistantMessage : optimisticAssistantMessage),
+    ],
   );
 
   const initializeState = ({ set }: MutableSnapshot) => {
     set(store.conversationByIndex(0), conversation);
-    set(store.isSubmittingFamily(0), submitting);
+    getDefaultStore().set(isSubmittingFamily(0), submitting);
   };
 
   render(
@@ -220,6 +252,7 @@ function renderStreamingRow(structured = false, submitting = true, siblingIdx = 
             structured={structured}
             submitting={submitting}
             siblingIdx={siblingIdx}
+            row={row}
           />
         </MemoryRouter>
       </RecoilRoot>
@@ -228,6 +261,10 @@ function renderStreamingRow(structured = false, submitting = true, siblingIdx = 
 
   return queryClient;
 }
+
+afterEach(() => {
+  resetSubmitting(getDefaultStore());
+});
 
 describe('streaming hover actions', () => {
   beforeEach(() => {
@@ -285,7 +322,7 @@ describe('streaming hover actions', () => {
     renderStreamingRow(structured);
 
     expect(screen.getByRole('navigation', { name: 'com_ui_sibling_navigation' })).toHaveClass(
-      '[@media(hover:hover)]:opacity-0',
+      'no-touch:opacity-0',
     );
   });
 
@@ -300,7 +337,7 @@ describe('streaming hover actions', () => {
   ])('holds the footer height while %s response streams', (_label, structured) => {
     renderStreamingRow(structured);
 
-    expect(screen.getByTestId('hover-buttons').parentElement).toHaveClass('min-h-[31px]');
+    expect(screen.getByTestId('hover-buttons').parentElement).toHaveClass('min-h-[1.9375rem]');
   });
 
   /**
@@ -314,6 +351,43 @@ describe('streaming hover actions', () => {
     renderStreamingRow(structured);
 
     expect(screen.getByTestId('stream-elapsed')).toBeInTheDocument();
+  });
+
+  /**
+   * The retry navigation holds its width in the footer whether or not hover has
+   * revealed it, so a row with siblings would otherwise indent the timer past the
+   * column the streaming dot just vacated. The reading stays at the column start.
+   */
+  it.each([
+    ['a plain text', Message],
+    ['a structured', StructuredMessage],
+    ['a flat-thread', MessageParts],
+  ])('keeps the elapsed reading left-most in %s streaming footer', (_label, row) => {
+    renderStreamingRow(false, true, 1, row);
+
+    const timer = screen.getByTestId('stream-elapsed');
+    const footer = screen.getByRole('navigation', {
+      name: 'com_ui_sibling_navigation',
+    }).parentElement;
+
+    expect(footer?.firstElementChild).toContainElement(timer);
+  });
+
+  /** An error content part renders without its message, so its row supplies the identity. */
+  it.each([
+    ['a structured', StructuredMessage],
+    ['a flat-thread', MessageParts],
+  ])("hands the error parts of %s row that row's model", (_label, row) => {
+    renderStreamingRow(true, true, 1, row, {
+      ...optimisticStructuredAssistantMessage,
+      endpoint: 'anthropic',
+      model: 'claude-sonnet-4-5',
+    });
+
+    expect(screen.getByTestId('structured-message-content')).toHaveAttribute(
+      'data-error-source-model',
+      'claude-sonnet-4-5',
+    );
   });
 
   it('renders no elapsed timer once the row is not submitting', () => {

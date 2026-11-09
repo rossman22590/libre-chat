@@ -1,15 +1,18 @@
 import type { AppConfig } from '@librechat/data-schemas';
 import type { RunConfig } from '@librechat/agents';
+import type { LangfuseTraceContext, LangfuseTraceUser } from './identity';
 import {
   hasLangfuseEnvCredentials,
   isLangfuseCentralMediaUploadDisabled,
   isLangfuseFanoutEnabled,
   isLangfuseTenantExportEnabled,
+  isLangfuseTraceAllowed,
   isLangfuseTraceSampled,
   isLangfuseTracingEnabled,
   usesLangfuseMultiTenantRouting,
 } from './policy';
 import { normalizeBoolean, resolveLangfuseHeaders, resolveTenantCredentials } from './utils';
+import { buildLangfuseTraceMetadata, resolveLangfuseTraceUserId } from './identity';
 import { resolveLangfuseTenantDestination } from './tenantDestinations';
 import { scopeHeadersToDestination } from './destinations';
 import { normalizeString } from '~/utils/text';
@@ -248,6 +251,9 @@ export function buildLangfuseConfig({
   runId,
   tenantId,
   centralTraceExportEnabled = true,
+  isTemporary,
+  user,
+  traceContext,
 }: {
   appConfig?: AppConfig;
   runId?: string;
@@ -258,6 +264,12 @@ export function buildLangfuseConfig({
    * to drop the central pipeline while preserving tenant fanout when available.
    */
   centralTraceExportEnabled?: boolean;
+  /** Disables every destination unless `langfuse.trace.temporaryChats` opts in. */
+  isTemporary?: boolean;
+  /** The requesting user, read only for the fields `langfuse.trace` allowlists. */
+  user?: LangfuseTraceUser;
+  /** Request values `langfuse.trace.conversationMetadataFields` may export. */
+  traceContext?: LangfuseTraceContext;
 } = {}): LangfuseRunConfig {
   const normalizedTenantId = normalizeString(tenantId);
   const config = appConfig?.langfuse;
@@ -265,7 +277,14 @@ export function buildLangfuseConfig({
   const langfuse: LangfuseRunConfigWithTraceAttributes = {
     deterministicTraceId: true,
   };
-  const metadata = mergeTraceMetadata(undefined, normalizedTenantId);
+  const traceUserId = resolveLangfuseTraceUserId(config?.trace, user);
+  if (traceUserId != null) {
+    langfuse.userId = traceUserId;
+  }
+  const metadata = mergeTraceMetadata(
+    buildLangfuseTraceMetadata({ trace: config?.trace, user, context: traceContext }),
+    normalizedTenantId,
+  );
   const tags = mergeTags(undefined, normalizedTenantId);
   if (metadata) {
     langfuse.metadata = metadata;
@@ -276,6 +295,7 @@ export function buildLangfuseConfig({
 
   if (
     !isLangfuseTracingEnabled() ||
+    !isLangfuseTraceAllowed(appConfig, isTemporary) ||
     (runId != null && !isLangfuseTraceSampled(traceIdForMessage(runId)))
   ) {
     langfuse.enabled = false;

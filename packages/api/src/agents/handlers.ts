@@ -1,10 +1,22 @@
 import yaml from 'js-yaml';
 import { Types } from 'mongoose';
-import { GraphEvents, Constants } from '@librechat/agents';
-import { logger, normalizeSkillFrontmatterKeys } from '@librechat/data-schemas';
-import { hasActivePiiFields, hasActivePiiPatterns } from 'librechat-data-provider';
+import { Constants, ToolEndHandler } from '@librechat/agents';
+import {
+  logger,
+  normalizeSkillFrontmatterKeys,
+  deriveStructuredFrontmatterFields,
+} from '@librechat/data-schemas';
+import {
+  AGENT_BACKGROUND_COMPLETION_RESULT_MAX_CHARS_DEFAULT,
+  CODE_ENVIRONMENT_READ_FILE_DEFAULT_LINES,
+  CODE_ENVIRONMENT_READ_FILE_HARD_MAX_LINES,
+  hasActivePiiFields,
+  hasActivePiiPatterns,
+  hasToolCallErrorPrefix,
+} from 'librechat-data-provider';
 import type {
   LCTool,
+  FileRefs,
   EventHandler,
   LCToolRegistry,
   InjectedMessage,
@@ -12,21 +24,48 @@ import type {
   ToolExecuteResult,
   ToolExecuteBatchRequest,
   SubagentTaskConfig,
+  SubagentExecutionContext,
   CallerCapabilityProjectionSnapshot,
+  StreamEventData,
+  ToolEndCallback as SdkToolEndCallback,
 } from '@librechat/agents';
+import type {
+  BackgroundToolResultClaim,
+  DeleteSkillResult,
+  ValidationIssue,
+} from '@librechat/data-schemas';
+import type { CodeEnvRef, CodeWorkspaceOperation, PtcToolCallEvent } from 'librechat-data-provider';
 import type { StructuredToolInterface } from '@librechat/agents/langchain/tools';
-import type { CodeEnvRef, PtcToolCallEvent } from 'librechat-data-provider';
-import type { ValidationIssue } from '@librechat/data-schemas';
+import type { CodeEnvFile, CodeSessionContext } from '@librechat/agents';
+import type {
+  WorkspaceAdmissionOptions,
+  WorkspaceEditResult,
+  WorkspaceTextEdit,
+  WorkspacePreviewEditResult,
+  WorkspaceListResult,
+  WorkspaceReadResult,
+  WorkspaceSearchResult,
+  WorkspaceWriteResult,
+} from '~/code/workspace';
 import type {
   BackgroundToolDeadClaimRecovery,
   BackgroundToolWakeupAdmission,
   BackgroundToolWakeupRegistration,
+  PendingBackgroundCompletionControls,
 } from './backgroundCompletion';
+import type { ScheduleMCPExecution } from '~/schedules/authorization/execution';
 import type { SkillFileRecord, PrimeSkillFilesResult } from './skillFiles';
+import type { InterruptibleToolBatchRequest } from './steering/tools';
+import type { ArtifactDeliveryFailure } from '~/files/code';
 import type { BackgroundToolResultState } from './harvest';
+import type { SandboxTextReader } from '~/files/code/text';
+import type { WorkspaceEditMatching } from '~/code/edits';
 import type { CodeExecutionContext } from './execution';
 import type { TextContentFragment } from '~/protection';
+import type { AuthoredSkillBinding } from './authored';
+import type { RunFileSession } from './files/session';
 import type { ServerRequest } from '~/types';
+import type { TextEdit } from './edits';
 import {
   backgroundTaskRegistry,
   runCheckBackgroundTask,
@@ -55,37 +94,81 @@ import {
   getBlockedUninspectableFileField,
   inspectContent,
   isContentTraversalLimitError,
+  isContentTraversalProtected,
 } from '~/protection';
 import {
   CREATE_FILE_TOOL_NAME,
   EDIT_FILE_TOOL_NAME,
   HOST_FILE_AUTHORING_ARTIFACT_KEY,
+  LIST_WORKSPACE_FILES_TOOL_NAME,
+  SEARCH_WORKSPACE_TOOL_NAME,
+  isCodeFileToolName,
   isCodeSessionToolName,
+  isFileResourceToolName,
 } from './tools';
+import {
+  resolveAttachedWorkspaceReadFileLines,
+  WorkspaceToolHttpError,
+  resolveAttachedWorkspaceAdmissionOptions,
+  WORKSPACE_EDIT_MAX_COUNT,
+  WORKSPACE_WRITE_MAX_BYTES,
+} from '~/code/workspace';
+import {
+  noteToolApprovalDispatch,
+  bindToolApprovalInvocation,
+  finishToolApprovalDispatch,
+  getToolApprovalExecutionScope,
+} from '~/tools/approval';
+import {
+  BACKGROUND_TASK_ABORT_GRACE_MS,
+  BACKGROUND_TASK_SHUTDOWN_MESSAGE,
+  BACKGROUND_TOOL_PRODUCER_HEARTBEAT_MS,
+} from './backgroundCompletion';
+import {
+  createCodeApiRateLimitBudget,
+  isAbortError,
+  logAxiosError,
+  truncateMiddle,
+  runOutsideTracing,
+  getSafeErrorMetadata,
+} from '~/utils';
+import {
+  isAttachedWorkspaceBashTool,
+  resolveAttachedWorkspaceQueueWaitMs,
+  resolveAttachedWorkspaceRequestTimeoutMs,
+} from '~/code/command';
 import {
   ContentFilterError,
   contentFilterModelBoundBlockResponse,
   isContentFilterError,
 } from '~/middleware/contentFilter';
 import {
-  BACKGROUND_TASK_ABORT_GRACE_MS,
-  BACKGROUND_TOOL_PRODUCER_HEARTBEAT_MS,
-} from './backgroundCompletion';
-import {
   hasIntentArg,
   stripIntentArg,
   stripIntentLabelsFromToolDefinitions,
   INTENT_ARG,
 } from './intent';
-import { getSafeErrorMetadata, logAxiosError, runOutsideTracing, truncateMiddle } from '~/utils';
+import { editConflictExcerptText, formatEditConflict, parseEditConflict } from '~/code/edits';
+import { buildSkillPrimeMessage, isSkillFilePath, SKILL_FILE_PREFIX } from './skills';
 import { resolveCallerCapabilityProjectionSnapshot } from './callerCapabilities';
-import { buildSkillPrimeMessage, SKILL_FILE_PREFIX } from './skills';
+import { SteerToolInterrupt, interruptedToolResult } from './steering/tools';
+import { BACKGROUND_TOOL_INVOCATION_CONFIG_KEY } from './invocation';
+import { mergeCodeFilesIntoContext } from './codeFilesSession';
+import { toolValidationFeedback } from './validationFeedback';
+import { explainWorkspacePathRejection } from '~/code/paths';
 import { createSkillContentDigest } from './compatibility';
+import { isMissingSandboxPathError } from '~/files/code';
+import { applyHostTextEdits } from './files/processing';
+import { deleteSkillWithRetry } from '~/skills/cleanup';
+import { resolveDownloadPath } from '~/storage/path';
 import { parseFrontmatter } from '../skills/import';
+import { HostEditError } from './files/matching';
+import { AuthoredSkillState } from './authored';
 import { cleanCodeToolOutput } from './cleanup';
 import { primeSkillFiles } from './skillFiles';
 import { instrumentPtcToolMap } from './ptc';
 import { markSandboxReady } from './prewarm';
+import { normalizeEditArgs } from './edits';
 
 export interface ToolEndCallbackData {
   /** The executed call's arguments. The stream-consumer tool-end path cannot
@@ -151,9 +234,24 @@ export interface EventActorDetachedActionLifecycle {
 }
 
 export interface ToolEndCallbackMetadata {
+  /** SDK-authored lineage for artifacts generated inside a child execution. */
+  executionContext?: SubagentExecutionContext;
   run_id?: string;
   thread_id?: string;
   [key: string]: unknown;
+}
+
+/** Projects the graph-owned agent and step identifiers onto persisted tool attachments. */
+export function getAttachmentOwnership(metadata?: ToolEndCallbackMetadata): {
+  agentId?: string;
+  stepId?: string;
+} {
+  const agentId = metadata?.executingAgentId ?? metadata?.agentId ?? metadata?.agent_id;
+  const stepId = metadata?.stepId;
+  return {
+    ...(typeof agentId === 'string' && agentId.length > 0 ? { agentId } : {}),
+    ...(typeof stepId === 'string' && stepId.length > 0 ? { stepId } : {}),
+  };
 }
 
 export type ToolEndCallback = (
@@ -161,7 +259,48 @@ export type ToolEndCallback = (
   metadata: ToolEndCallbackMetadata,
 ) => Promise<void>;
 
+/**
+ * Preserve the SDK's event-handler contract while attaching the graph-owned
+ * step identity to legacy artifact callbacks. `toolCallStepIds` is populated
+ * by ToolNode for the actual provider tool call; this wrapper never invents a
+ * fallback identity.
+ */
+export function createOwnedToolEndHandler(
+  callback: SdkToolEndCallback,
+  loggerArg: typeof logger = logger,
+): EventHandler {
+  const toolEndHandler = new ToolEndHandler(callback, loggerArg);
+  return {
+    handle: async (event, data: StreamEventData, metadata, graph) => {
+      const output = data?.output;
+      const toolCallId =
+        typeof output === 'object' && output != null
+          ? (output as { tool_call_id?: unknown }).tool_call_id
+          : undefined;
+      const stepId =
+        typeof toolCallId === 'string' ? graph?.toolCallStepIds?.get(toolCallId) : undefined;
+      const ownedMetadata =
+        typeof stepId === 'string' && stepId.length > 0
+          ? { ...(metadata ?? {}), stepId }
+          : metadata;
+      return toolEndHandler.handle(event, data, ownedMetadata, graph);
+    },
+  };
+}
+
 export interface ToolExecuteOptions {
+  /** Host observer, called only after authoring has bound an authorized identity. */
+  onSkillAuthored?: (binding: Pick<AuthoredSkillBinding, 'name' | 'id' | 'primed'>) => void;
+  /** Host-captured authority ceiling, never runnable/model metadata. */
+  scheduledMCPExecution?: Pick<ScheduleMCPExecution, 'enrolled' | 'identity'>;
+  /**
+   * Host-owned signal for the foreground run. This is authoritative across
+   * graph reconstruction (including approval resume); the SDK event signal is
+   * composed with it below so circuit-breaker cancellation is preserved too.
+   */
+  runSignal?: AbortSignal;
+  /** Run id owned by `runSignal`; detached child runs carry a different id. */
+  foregroundRunId?: string;
   /** Loads tools by name, using agentId to look up agent-specific context */
   loadTools: (
     toolNames: string[],
@@ -170,6 +309,10 @@ export interface ToolExecuteOptions {
     configurable?: Record<string, unknown>,
     /** SDK-owned live caller capability projection for this agent context. */
     callerCapabilityProjection?: CallerCapabilityProjectionSnapshot,
+    /** Effective cancellation signal for this tool-execute batch. */
+    signal?: AbortSignal,
+    /** SDK-authored lineage; never derive child identity from saved agent IDs. */
+    executionContext?: SubagentExecutionContext,
   ) => Promise<{
     loadedTools: StructuredToolInterface[];
     /** Additional configurable properties to merge (e.g., userMCPAuthMap) */
@@ -177,10 +320,28 @@ export interface ToolExecuteOptions {
   }>;
   /** Trusted detached-subagent task scope for polling and parent controls. */
   subagentTasks?: SubagentTaskConfig;
+  /** Shared-file grants and tool contexts scoped to the executing run instance. */
+  runFiles?: Pick<RunFileSession, 'isActive' | 'prepareTools' | 'withCodeExecution'>;
+  /** Trusted deployment gate for cooperative ordinary-tool cancellation. */
+  ordinaryToolCancellation?: boolean;
+  /** Deployment-configured cap for terminal output copied into durable receipts. */
+  backgroundCompletionResultMaxChars?: number;
   /** Callback to process tool artifacts (code output files, file citations, etc.) */
   toolEndCallback?: ToolEndCallback;
+  /** Run steps whose call resolved to the attached-workspace `bash_tool`
+   *  instance; the step-completed handler consumes them to stamp `executor`. */
+  attachedCommandStepIds?: Set<string>;
   /** Durable internal-completion adapter, present only for an Event Actor invocation. */
   eventActorDetachedAction?: EventActorDetachedActionLifecycle;
+  /** Called once per batch before tool execution to lazily provision files to tool
+   *  environments. Resolves to the code-env refs it uploaded, which the caller folds
+   *  into this batch's code-session context. */
+  provisionFiles?: (
+    toolNames: string[],
+    agentId?: string,
+    signal?: AbortSignal,
+    executionContext?: SubagentExecutionContext,
+  ) => Promise<CodeEnvFile[] | void>;
   /**
    * Persists a backgrounded code-execution result onto the dispatch turn once
    * the detached call settles: downloads/persists generated files, patches the
@@ -205,6 +366,7 @@ export interface ToolExecuteOptions {
     reapply?: boolean;
     backgroundTask?: BackgroundToolResultState;
     resolveBackgroundTask?: () => BackgroundToolResultState;
+    onFilesPersisted?: (attachments: unknown[]) => void;
   }) => Promise<{ attachments?: unknown[]; deliveryReady?: boolean } | null>;
   /** Shared ordinary-tool completion lifecycle. The delivery is registered
    * before invoke; settlement is persisted onto the original response row. */
@@ -226,16 +388,18 @@ export interface ToolExecuteOptions {
     claim: (params: {
       userId: string;
       conversationId: string;
-      messageId: string;
+      messageId?: string;
       taskId: string;
       agentId?: string;
       kind: 'manual';
       claimId: string;
-    }) => Promise<
-      | { status: 'acquired' | 'not_found' | 'not_ready' }
-      | { status: 'claimed'; claim?: { kind: 'manual' | 'wakeup'; claimId: string } }
-    >;
+      generationId?: string;
+      allowUnfinished?: boolean;
+    }) => Promise<BackgroundToolResultClaim>;
     recoverDeadClaim?: BackgroundToolDeadClaimRecovery;
+    /** Durable view of undelivered completions, so a status check counts results
+     * dispatched in earlier turns, on other replicas, or before a restart. */
+    pending?: PendingBackgroundCompletionControls;
   };
   /** Emits an `attachment` SSE event on the current request's live stream. */
   emitAttachment?: (attachment: unknown) => void;
@@ -271,6 +435,7 @@ export interface ToolExecuteOptions {
      *  prior cache entry. */
     version: number;
     fileCount: number;
+    source?: 'inline' | 'github' | 'notion' | 'deployment';
     /** True for deployment-directory skills that are loaded in memory. */
     deployment?: boolean;
     /**
@@ -305,6 +470,7 @@ export interface ToolExecuteOptions {
     _id: Types.ObjectId;
     version: number;
     fileCount: number;
+    source?: 'inline' | 'github' | 'notion' | 'deployment';
     disableModelInvocation?: boolean;
   } | null>;
   /** Creates a skill from a tool-authored SKILL.md body. */
@@ -358,7 +524,7 @@ export interface ToolExecuteOptions {
     skillId: Types.ObjectId | string;
   }) => Promise<void>;
   /** Deletes a freshly-created skill if owner-permission setup fails. */
-  deleteSkill?: (id: string) => Promise<{ deleted: boolean }>;
+  deleteSkill?: (id: string) => Promise<DeleteSkillResult>;
   /** Saves or replaces a bundled skill file in configured storage and metadata. */
   saveSkillFileContent?: (params: {
     req: ServerRequest;
@@ -366,6 +532,8 @@ export interface ToolExecuteOptions {
     relativePath: string;
     content: string;
     mimeType: string;
+    expectedFileId?: string;
+    createOnly: boolean;
   }) => Promise<{
     bytes: number;
     relativePath: string;
@@ -389,6 +557,8 @@ export interface ToolExecuteOptions {
     read_only?: boolean;
     codeApiBaseUrl?: string;
     executionProfile?: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
+    signal?: AbortSignal;
   }) => Promise<{
     storage_session_id: string;
     files: Array<{ fileId: string; filename: string }>;
@@ -400,6 +570,7 @@ export interface ToolExecuteOptions {
     route?: {
       baseUrl?: string;
       executionProfile?: CodeExecutionContext['executionProfile'];
+      bridgeWorkerId?: string;
     },
   ) => Promise<string | null>;
   /** 23-hour freshness check */
@@ -417,6 +588,7 @@ export interface ToolExecuteOptions {
     skillId: Types.ObjectId | string,
     relativePath: string,
   ) => Promise<{
+    file_id?: string;
     content?: string;
     isBinary?: boolean;
     mimeType: string;
@@ -430,28 +602,127 @@ export interface ToolExecuteOptions {
     skillId: Types.ObjectId | string,
     relativePath: string,
     update: { content?: string; isBinary?: boolean },
+    expectedFileId?: string,
   ) => Promise<void>;
-  /**
-   * Reads a code-execution sandbox file by shelling `cat` through the
-   * sandbox `/exec` endpoint. The host implementation supplies the
-   * codeapi base URL + auth and forwards the seeded `session_id` and
-   * `files` so the read lands in the same sandbox session that holds
-   * the agent's prior-turn artifacts. Returns `null` when codeapi is
-   * unavailable; throws on transport errors so the handler can surface
-   * a meaningful error message to the model.
-   */
-  readSandboxFile?: (params: {
+  /** Reads a bounded text range from an attached worker's logical workspace. */
+  readWorkspaceFile?: (params: {
     file_path: string;
-    session_id?: string;
-    files?: Array<{ id: string; name: string; session_id?: string; storage_session_id?: string }>;
-    /** Per-conversation stateful runtime-session hint (thread_id); forwarded so a
-     *  host file op that is the first sandbox call joins the same runtime session
-     *  as bash_tool instead of the Code API's default session. */
-    runtime_session_hint?: string;
-    codeApiBaseUrl?: string;
-    executionProfile?: CodeExecutionContext['executionProfile'];
+    workspace_id: string;
+    workspace_instance_id?: string;
+    linked_worktrees?: boolean;
+    start_line: number;
+    max_lines: number;
+    codeApiBaseUrl: string;
+    executionProfile: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
     req?: ServerRequest;
-  }) => Promise<{ content: string } | null>;
+    signal?: AbortSignal;
+    maxQueueWaitMs?: number;
+    maxRequestTimeoutMs?: number;
+    maxRunTimeoutMs?: number;
+    admission?: WorkspaceAdmissionOptions['admission'];
+    deadlineAtMs?: number;
+  }) => Promise<WorkspaceReadResult>;
+  /** Searches literal text within an attached worker's logical workspace. */
+  searchWorkspace?: (params: {
+    query: string;
+    workspace_id: string;
+    workspace_instance_id?: string;
+    linked_worktrees?: boolean;
+    path?: string;
+    max_results: number;
+    codeApiBaseUrl: string;
+    executionProfile: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
+    req?: ServerRequest;
+    signal?: AbortSignal;
+    maxQueueWaitMs?: number;
+    maxRequestTimeoutMs?: number;
+    maxRunTimeoutMs?: number;
+    admission?: WorkspaceAdmissionOptions['admission'];
+    deadlineAtMs?: number;
+  }) => Promise<WorkspaceSearchResult>;
+  /** Lists relative file paths within an attached worker's logical workspace. */
+  listWorkspaceFiles?: (params: {
+    workspace_id: string;
+    workspace_instance_id?: string;
+    linked_worktrees?: boolean;
+    path?: string;
+    after_path?: string;
+    max_results: number;
+    codeApiBaseUrl: string;
+    executionProfile: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
+    req?: ServerRequest;
+    signal?: AbortSignal;
+    maxQueueWaitMs?: number;
+    maxRequestTimeoutMs?: number;
+    maxRunTimeoutMs?: number;
+    admission?: WorkspaceAdmissionOptions['admission'];
+    deadlineAtMs?: number;
+  }) => Promise<WorkspaceListResult>;
+  /** Writes a UTF-8 file within an attached worker's logical workspace. */
+  writeWorkspaceFile?: (params: {
+    file_path: string;
+    content: string;
+    overwrite: boolean;
+    workspace_id: string;
+    workspace_instance_id?: string;
+    linked_worktrees?: boolean;
+    codeApiBaseUrl: string;
+    executionProfile: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
+    req?: ServerRequest;
+    signal?: AbortSignal;
+    maxQueueWaitMs?: number;
+    maxRequestTimeoutMs?: number;
+    maxRunTimeoutMs?: number;
+    admission?: WorkspaceAdmissionOptions['admission'];
+    deadlineAtMs?: number;
+  }) => Promise<WorkspaceWriteResult>;
+  /** Previews exact replacements without mutating an attached worker workspace. */
+  previewWorkspaceEdit?: (params: {
+    file_path: string;
+    edits: WorkspaceTextEdit[];
+    /** Sent only to workers that negotiated `tolerant_match`. */
+    matching?: WorkspaceEditMatching;
+    workspace_id: string;
+    workspace_instance_id?: string;
+    linked_worktrees?: boolean;
+    codeApiBaseUrl: string;
+    executionProfile: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
+    req?: ServerRequest;
+    signal?: AbortSignal;
+    maxQueueWaitMs?: number;
+    maxRequestTimeoutMs?: number;
+    maxRunTimeoutMs?: number;
+    admission?: WorkspaceAdmissionOptions['admission'];
+    deadlineAtMs?: number;
+  }) => Promise<WorkspacePreviewEditResult>;
+  /** Applies exact replacements atomically within an attached worker workspace. */
+  editWorkspaceFile?: (params: {
+    file_path: string;
+    edits: WorkspaceTextEdit[];
+    expected_base_sha256?: string;
+    /** Sent only to workers that negotiated `tolerant_match`. */
+    matching?: WorkspaceEditMatching;
+    workspace_id: string;
+    workspace_instance_id?: string;
+    linked_worktrees?: boolean;
+    codeApiBaseUrl: string;
+    executionProfile: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
+    req?: ServerRequest;
+    signal?: AbortSignal;
+    maxQueueWaitMs?: number;
+    maxRequestTimeoutMs?: number;
+    maxRunTimeoutMs?: number;
+    admission?: WorkspaceAdmissionOptions['admission'];
+    deadlineAtMs?: number;
+  }) => Promise<WorkspaceEditResult>;
+  /** Bounded reads return complete text; omitted maxBytes retains the legacy stdout path. */
+  readSandboxFile?: SandboxTextReader;
   /**
    * Reads a small image file out of the code-execution sandbox as base64 so
    * `read_file` can surface it to vision-capable models. The `readSandboxFile`
@@ -465,15 +736,25 @@ export interface ToolExecuteOptions {
   readSandboxImage?: (params: {
     file_path: string;
     session_id?: string;
-    files?: Array<{ id: string; name: string; session_id?: string; storage_session_id?: string }>;
+    files?: SandboxFileRef[];
     /** @see readSandboxFile.runtime_session_hint */
     runtime_session_hint?: string;
     codeApiBaseUrl?: string;
     executionProfile?: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
+    executionRouteKey?: string;
     /** In-sandbox size cap; files larger than this return `tooLarge` without transferring bytes. */
     maxBytes?: number;
     req?: ServerRequest;
-  }) => Promise<{ base64: string; bytes: number } | { tooLarge: true; bytes: number } | null>;
+    signal?: AbortSignal;
+  }) => Promise<
+    | { base64: string; bytes: number }
+    /** `size`: over `maxBytes`. `round_trips`: within the byte cap, but more
+     *  windowed `/exec` reads than one call may spend on the Code API's
+     *  per-user execution limiter. */
+    | { tooLarge: true; reason?: 'size' | 'round_trips'; bytes: number; inlineCeiling?: number }
+    | null
+  >;
   /**
    * Writes a UTF-8 text file into the code-execution sandbox via the
    * sandbox `/exec` endpoint. Mirrors `readSandboxFile` session forwarding
@@ -484,7 +765,7 @@ export interface ToolExecuteOptions {
     file_path: string;
     content: string;
     session_id?: string;
-    files?: Array<{ id: string; name: string; session_id?: string; storage_session_id?: string }>;
+    files?: SandboxFileRef[];
     /** @see readSandboxFile.runtime_session_hint */
     runtime_session_hint?: string;
     codeApiBaseUrl?: string;
@@ -494,12 +775,26 @@ export interface ToolExecuteOptions {
     stdout?: string;
     stderr?: string;
     session_id?: string;
-    files?: Array<{ id: string; name: string; storage_session_id?: string; session_id?: string }>;
+    files?: SandboxFileRef[];
+    artifact_delivery?: ArtifactDeliveryFailure;
   } | null>;
 }
 
 const MAX_READABLE_BYTES = 262_144;
 const MAX_BINARY_BYTES = 5 * 1024 * 1024;
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.byteLength <= maxBytes) {
+    return value;
+  }
+  let end = maxBytes;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) {
+    end -= 1;
+  }
+  return bytes.subarray(0, end).toString('utf8');
+}
+
 /**
  * Inline ceiling for images pulled out of the code-execution sandbox —
  * deliberately tighter than {@link MAX_BINARY_BYTES}, which governs the
@@ -544,9 +839,36 @@ function getCodeExecutionContext(
   return candidate as CodeExecutionContext;
 }
 
+function selectedWorkspaceId(
+  context: CodeExecutionContext,
+  operation: CodeWorkspaceOperation,
+): string | undefined {
+  const workspace = context.codeWorkspace;
+  if (
+    workspace == null ||
+    workspace.environmentId !== context.environmentId ||
+    !workspace.operations.includes(operation)
+  ) {
+    return undefined;
+  }
+  return workspace.workspaceId;
+}
+
+function unavailableWorkspaceOperation(
+  tc: ToolCallRequest,
+  operation: CodeWorkspaceOperation,
+): ToolExecuteResult {
+  return errorResult(
+    tc,
+    `The selected attached workspace is unavailable or does not permit ${operation}. Choose an available workspace and retry.`,
+  );
+}
+
 function codeExecutionRequestParams(context?: CodeExecutionContext): {
   codeApiBaseUrl?: string;
   executionProfile?: CodeExecutionContext['executionProfile'];
+  bridgeWorkerId?: string;
+  executionRouteKey?: string;
   runtime_session_hint?: string;
 } {
   if (!context) {
@@ -555,6 +877,8 @@ function codeExecutionRequestParams(context?: CodeExecutionContext): {
   return {
     codeApiBaseUrl: context.baseUrl,
     executionProfile: context.executionProfile,
+    ...(context.executionRouteKey ? { executionRouteKey: context.executionRouteKey } : {}),
+    ...(context.bridgeWorkerId ? { bridgeWorkerId: context.bridgeWorkerId } : {}),
     ...(context.runtimeSessionHint ? { runtime_session_hint: context.runtimeSessionHint } : {}),
   };
 }
@@ -594,19 +918,33 @@ function getThrownValueMessage(error: unknown): string {
   return stringifyThrownValue(error);
 }
 
-function getSafeToolError(error: unknown): {
+function getSafeToolError(
+  error: unknown,
+  feedback?: string,
+): {
   message: string;
   logContext: Record<string, unknown>;
 } {
-  const rawMessage = getThrownValueMessage(error);
+  const thrownMessage = feedback ?? getThrownValueMessage(error);
+  /** File text an attached edit conflict quotes goes to the model only, never to the logs. */
+  const rawMessage =
+    !feedback && error instanceof AttachedEditRejectionError ? error.modelMessage : thrownMessage;
+  const logMessage = truncateMiddle(thrownMessage, MAX_TOOL_ERROR_MESSAGE_CHARS);
   const message = truncateMiddle(rawMessage, MAX_TOOL_ERROR_MESSAGE_CHARS);
-  const stack = error instanceof Error && error.stack ? error.stack : undefined;
+  const stack = !feedback && error instanceof Error && error.stack ? error.stack : undefined;
 
   return {
     message,
     logContext: {
-      name: error instanceof Error ? error.name : typeof error,
-      message,
+      errorName: error instanceof Error ? error.name : typeof error,
+      ...(error instanceof WorkspaceToolHttpError
+        ? {
+            upstreamStatus: error.upstreamStatus,
+            upstreamBody: error.upstreamBody,
+            upstreamBodyTruncated: error.upstreamBodyTruncated,
+          }
+        : {}),
+      errorMessage: logMessage,
       messageLength: rawMessage.length,
       messageTruncated: message.length !== rawMessage.length,
       stack: stack ? truncateMiddle(stack, MAX_TOOL_ERROR_STACK_CHARS) : undefined,
@@ -728,10 +1066,103 @@ function getValueShape(value: unknown): string {
   return typeof value;
 }
 
-function addLineNumbers(content: string): string {
+function addLineNumbers(content: string, startLine = 1): string {
   const lines = content.split('\n');
-  const w = String(lines.length).length;
-  return lines.map((l, i) => `${String(i + 1).padStart(w, ' ')} | ${l}`).join('\n');
+  const w = String(startLine + lines.length - 1).length;
+  return lines
+    .map((line, index) => `${String(startLine + index).padStart(w, ' ')} | ${line}`)
+    .join('\n');
+}
+
+type ReadFileRangeArguments = { start_line?: number; max_lines?: number };
+type ReadFileRange = { startLine: number; maxLines: number };
+const READ_FILE_RANGE_ERROR =
+  'start_line must be positive and max_lines must be between 1 and 500.';
+
+function resolveReadFileRange(
+  args: ReadFileRangeArguments,
+  defaultMaxLines = CODE_ENVIRONMENT_READ_FILE_DEFAULT_LINES,
+): ReadFileRange | null {
+  const startLine = args.start_line ?? 1;
+  const maxLines = args.max_lines ?? defaultMaxLines;
+  return Number.isSafeInteger(startLine) &&
+    startLine >= 1 &&
+    Number.isSafeInteger(maxLines) &&
+    maxLines >= 1 &&
+    maxLines <= CODE_ENVIRONMENT_READ_FILE_HARD_MAX_LINES
+    ? { startLine, maxLines }
+    : null;
+}
+
+/** Full local files are sliced once; a worker page is already offset and bounded. */
+function formatReadFileText(
+  content: string,
+  path: string,
+  range?: ReadFileRange,
+  page?: { startLine: number; nextStartLine?: number },
+): string {
+  let payload = content;
+  const startLine = page?.startLine ?? range?.startLine ?? 1;
+  let nextStartLine = page?.nextStartLine;
+  if (range != null && page == null) {
+    let start = 0;
+    for (let line = 1; line < range.startLine; line++) {
+      const newline = content.indexOf('\n', start);
+      if (newline < 0) return '';
+      start = newline + 1;
+    }
+    if (start >= content.length) return '';
+    let end = content.length;
+    let cursor = start;
+    for (let count = 1; count <= range.maxLines; count++) {
+      const newline = content.indexOf('\n', cursor);
+      if (newline < 0) break;
+      if (count === range.maxLines || newline === content.length - 1) {
+        end = newline;
+        if (newline < content.length - 1) nextStartLine = startLine + count;
+        break;
+      }
+      cursor = newline + 1;
+    }
+    payload = content.slice(start, end);
+  }
+
+  let locallyTruncated = false;
+  let localNextStartLine: number | undefined;
+  if ((range != null || page != null) && Buffer.byteLength(payload, 'utf8') > MAX_READABLE_BYTES) {
+    payload = truncateUtf8(payload, MAX_READABLE_BYTES);
+    locallyTruncated = true;
+    const lastCompleteLine = payload.lastIndexOf('\n');
+    if (lastCompleteLine >= 0) {
+      payload = payload.slice(0, lastCompleteLine);
+      localNextStartLine = startLine + payload.split('\n').length;
+    }
+  }
+  let numbered = addLineNumbers(payload, startLine);
+  if (locallyTruncated) {
+    numbered +=
+      localNextStartLine != null
+        ? `\n\n[truncated at ${MAX_READABLE_BYTES} bytes; more content is available; call read_file again with path "${path}" and start_line ${localNextStartLine}]`
+        : `\n\n[the line was truncated at ${MAX_READABLE_BYTES} bytes and cannot be paged by line]`;
+  } else if (nextStartLine != null) {
+    numbered += `\n\n[more content is available; call read_file again with path "${path}" and start_line ${nextStartLine}]`;
+  }
+  return numbered;
+}
+
+function localTextReadResult(
+  tc: ToolCallRequest,
+  path: string,
+  content: string,
+  header = '',
+): ToolExecuteResult {
+  const args = tc.args as ReadFileRangeArguments;
+  const range =
+    args.start_line === undefined && args.max_lines === undefined
+      ? undefined
+      : resolveReadFileRange(args);
+  if (range === null) return errorResult(tc, READ_FILE_RANGE_ERROR);
+  return successResult(tc, header + formatReadFileText(content, path, range));
 }
 
 type AuthoringSkill = NonNullable<
@@ -746,31 +1177,33 @@ type ParsedSkillAuthoringPath = {
   displayPath: string;
 };
 
-type TextEdit = {
-  old_text: string;
-  new_text: string;
-};
-
-type MatchStatus =
-  | { status: 'matched'; index: number; length: number; strategy: string }
-  | { status: 'none' }
-  | { status: 'ambiguous'; strategy: string; count: number };
-
 type LoadedSkillText =
-  | { status: 'loaded'; content: string; bytes: number }
+  | { status: 'loaded'; content: string; bytes: number; fileId?: string }
   | { status: 'missing' }
   | { status: 'error'; message: string };
 
 type ExistingSkillFile =
-  | { status: 'present'; oldContent?: string }
+  | { status: 'present'; oldContent?: string; fileId?: string }
   | { status: 'missing' }
   | { status: 'error'; message: string };
 
 type LoadedSandboxText = LoadedSkillText;
 
+/**
+ * A code-session file ref as it crosses the host boundary: the SDK's wire
+ * shape (`kind` / `resource_id` / `version` / `inherited`) plus the legacy
+ * per-file `session_id` older Code API responses carry, which
+ * `getPreparedCodeOutputBuffer` still reads as a storage-session fallback.
+ * Every field is load-bearing on the wire — `version` is required for
+ * `kind: 'skill'` refs and `resource_id` names the resource that owns the
+ * file's storage session — so refs must be carried whole, never rebuilt
+ * from a subset.
+ */
+type SandboxFileRef = FileRefs[number] & { session_id?: string };
+
 type SandboxSessionContext = {
   session_id?: string;
-  files?: Array<{ id: string; name: string; session_id?: string; storage_session_id?: string }>;
+  files?: SandboxFileRef[];
 };
 
 const MIME_MAP: Readonly<Record<string, string>> = Object.freeze({
@@ -855,10 +1288,13 @@ function filteredToolArgumentsResult(
     if (!isContentTraversalLimitError(error)) {
       throw error;
     }
-    return (
-      filteredContentResult(tc, req, getContentTraversalFragments(error)) ??
-      errorResult(tc, error.body.message)
-    );
+    const filtered = filteredContentResult(tc, req, getContentTraversalFragments(error));
+    if (filtered != null) {
+      return filtered;
+    }
+    return isContentTraversalProtected({ error, filters: req?.config?.filters })
+      ? errorResult(tc, error.body.message)
+      : null;
   }
 }
 
@@ -906,10 +1342,13 @@ function filteredToolOutputResult(
     if (!isContentTraversalLimitError(error)) {
       throw error;
     }
-    return (
-      filteredContentResult(tc, req, getContentTraversalFragments(error)) ??
-      errorResult(tc, error.body.message)
-    );
+    const filtered = filteredContentResult(tc, req, getContentTraversalFragments(error));
+    if (filtered != null) {
+      return filtered;
+    }
+    return isContentTraversalProtected({ error, filters: req?.config?.filters })
+      ? errorResult(tc, error.body.message)
+      : null;
   }
 }
 
@@ -954,7 +1393,7 @@ function isFilteredSkillProjection(
     return filteredSkillResult(tc, req, input) != null;
   } catch (error) {
     if (isContentTraversalLimitError(error)) {
-      return true;
+      return isContentTraversalProtected({ error, filters: req?.config?.filters });
     }
     throw error;
   }
@@ -1321,220 +1760,6 @@ function getAuthorInfo(req: ServerRequest): {
   };
 }
 
-/* Models often stringify nested JSON (JSON-in-JSON) instead of passing a
-   real array/object, which would otherwise fail validation and cost a retry
-   round-trip. Parse a JSON string back to its value; leave non-strings and
-   unparseable strings untouched so the explicit errors below still fire. */
-function coerceJsonValue(value: unknown): unknown {
-  if (typeof value !== 'string') {
-    return value;
-  }
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
-function normalizeEditArgs(args: {
-  old_text?: unknown;
-  new_text?: unknown;
-  edits?: unknown;
-}): TextEdit[] | string {
-  const coercedEdits = coerceJsonValue(args.edits);
-  if (Array.isArray(coercedEdits) && coercedEdits.length > 0) {
-    const edits: TextEdit[] = [];
-    for (const rawEdit of coercedEdits) {
-      const edit = coerceJsonValue(rawEdit);
-      if (!edit || typeof edit !== 'object') {
-        return 'Each edit must be an object with old_text and new_text.';
-      }
-      const entry = edit as { old_text?: unknown; new_text?: unknown };
-      if (typeof entry.old_text !== 'string' || typeof entry.new_text !== 'string') {
-        return 'Each edit requires string old_text and new_text.';
-      }
-      if (entry.old_text.length === 0) {
-        return 'old_text cannot be empty.';
-      }
-      edits.push({ old_text: entry.old_text, new_text: entry.new_text });
-    }
-    return edits;
-  }
-
-  if (typeof args.old_text !== 'string' || typeof args.new_text !== 'string') {
-    return 'Provide old_text and new_text, or a non-empty edits array.';
-  }
-  if (args.old_text.length === 0) {
-    return 'old_text cannot be empty.';
-  }
-  return [{ old_text: args.old_text, new_text: args.new_text }];
-}
-
-function countExactOccurrences(content: string, needle: string): number[] {
-  const indexes: number[] = [];
-  let start = 0;
-  while (start <= content.length) {
-    const index = content.indexOf(needle, start);
-    if (index === -1) {
-      break;
-    }
-    indexes.push(index);
-    start = index + Math.max(1, needle.length);
-  }
-  return indexes;
-}
-
-function findExactMatch(content: string, needle: string): MatchStatus {
-  const matches = countExactOccurrences(content, needle);
-  if (matches.length === 1) {
-    return { status: 'matched', index: matches[0], length: needle.length, strategy: 'exact' };
-  }
-  if (matches.length > 1) {
-    return { status: 'ambiguous', strategy: 'exact', count: matches.length };
-  }
-  return { status: 'none' };
-}
-
-function lineStarts(content: string): number[] {
-  const starts = [0];
-  for (let i = 0; i < content.length; i++) {
-    if (content[i] === '\n') {
-      starts.push(i + 1);
-    }
-  }
-  return starts;
-}
-
-function commonIndent(lines: string[]): number {
-  const indents = lines
-    .filter((line) => line.trim().length > 0)
-    .map((line) => {
-      const match = /^(\s*)/.exec(line);
-      return match ? match[1].length : 0;
-    });
-  return indents.length > 0 ? Math.min(...indents) : 0;
-}
-
-function stripCommonIndent(text: string): string {
-  const lines = text.split('\n');
-  const indent = commonIndent(lines);
-  if (indent === 0) {
-    return text;
-  }
-  return lines.map((line) => line.slice(Math.min(indent, line.length))).join('\n');
-}
-
-function findLineWindowMatch(
-  content: string,
-  needle: string,
-  strategy: 'line-trimmed' | 'indentation-flexible',
-): MatchStatus {
-  const contentLines = content.split('\n');
-  const needleLines = needle.split('\n');
-  if (needleLines.length > contentLines.length) {
-    return { status: 'none' };
-  }
-
-  const starts = lineStarts(content);
-  const normalizedNeedle =
-    strategy === 'line-trimmed'
-      ? needleLines.map((line) => line.trimEnd()).join('\n')
-      : stripCommonIndent(needle);
-  const matches: Array<{ index: number; length: number }> = [];
-
-  for (let i = 0; i <= contentLines.length - needleLines.length; i++) {
-    const windowLines = contentLines.slice(i, i + needleLines.length);
-    const candidate =
-      strategy === 'line-trimmed'
-        ? windowLines.map((line) => line.trimEnd()).join('\n')
-        : stripCommonIndent(windowLines.join('\n'));
-    if (candidate !== normalizedNeedle) {
-      continue;
-    }
-    const index = starts[i];
-    const endLine = i + needleLines.length;
-    const end = endLine < starts.length ? starts[endLine] - 1 : content.length;
-    matches.push({ index, length: end - index });
-  }
-
-  if (matches.length === 1) {
-    return { status: 'matched', ...matches[0], strategy };
-  }
-  if (matches.length > 1) {
-    return { status: 'ambiguous', strategy, count: matches.length };
-  }
-  return { status: 'none' };
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function findWhitespaceNormalizedMatch(content: string, needle: string): MatchStatus {
-  const tokens = needle.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length < 2) {
-    return { status: 'none' };
-  }
-  const pattern = tokens.map(escapeRegExp).join('\\s+');
-  const regex = new RegExp(pattern, 'g');
-  const matches: Array<{ index: number; length: number }> = [];
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(content)) != null) {
-    matches.push({ index: match.index, length: match[0].length });
-    if (match[0].length === 0) {
-      regex.lastIndex += 1;
-    }
-  }
-  if (matches.length === 1) {
-    return { status: 'matched', ...matches[0], strategy: 'whitespace-normalized' };
-  }
-  if (matches.length > 1) {
-    return { status: 'ambiguous', strategy: 'whitespace-normalized', count: matches.length };
-  }
-  return { status: 'none' };
-}
-
-function findReplacementMatch(content: string, needle: string): MatchStatus {
-  const exact = findExactMatch(content, needle);
-  if (exact.status !== 'none') {
-    return exact;
-  }
-  const lineTrimmed = findLineWindowMatch(content, needle, 'line-trimmed');
-  if (lineTrimmed.status !== 'none') {
-    return lineTrimmed;
-  }
-  const whitespaceNormalized = findWhitespaceNormalizedMatch(content, needle);
-  if (whitespaceNormalized.status !== 'none') {
-    return whitespaceNormalized;
-  }
-  return findLineWindowMatch(content, needle, 'indentation-flexible');
-}
-
-function applyTextEdits(
-  content: string,
-  edits: TextEdit[],
-): { content: string; strategies: string[] } {
-  let working = content;
-  const strategies: string[] = [];
-
-  for (const edit of edits) {
-    const match = findReplacementMatch(working, edit.old_text);
-    if (match.status === 'none') {
-      throw new Error('old_text did not match the file content.');
-    }
-    if (match.status === 'ambiguous') {
-      throw new Error(
-        `old_text matched ${match.count} locations with ${match.strategy}; make it unique before retrying.`,
-      );
-    }
-    working =
-      working.slice(0, match.index) + edit.new_text + working.slice(match.index + match.length);
-    strategies.push(match.strategy);
-  }
-
-  return { content: working, strategies };
-}
-
 function formatRange(start: number, count: number): string {
   return count === 1 ? String(start) : `${start},${count}`;
 }
@@ -1849,14 +2074,37 @@ function looksBinary(content: string): boolean {
 }
 
 /**
+ * Model-visible error for an image the sandbox could not hand back. The
+ * read is a supported operation that FAILED, so the message must not reuse
+ * the "images cannot be read as text" phrasing — that reads as a permanent
+ * capability limit and stops the model from ever retrying. State the real
+ * cause and the affordance that matches it: a rate-limited or truncated
+ * read is worth retrying, a missing path is worth listing, and only a
+ * genuine transport dead end falls back to `bash_tool`. Classification is
+ * by message, matching how `isSandboxMissingFileError` already reads
+ * sandbox failures; the rate-limit wording is the one `readSandboxImage`
+ * throws when the Code API limiter turns a chunk away.
+ */
+function buildImageReadError(filePath: string, reason: string): string {
+  const detail = reason.replace(/\.$/, '');
+  if (isMissingSandboxPathError(reason)) {
+    return `"${filePath}" was not found in the code-execution sandbox (${detail}). List the directory with \`bash_tool\` (e.g. \`ls /mnt/data\`) to find the correct path.`;
+  }
+  if (/rate limit/i.test(reason)) {
+    return `Could not read image "${filePath}": ${detail}. Wait for the sandbox to accept requests again, then read it once more.`;
+  }
+  return `Could not read image "${filePath}" from the code-execution sandbox: ${detail}. Retry the read; if it keeps failing, inspect the file with \`bash_tool\` (e.g. \`file ${filePath}\`).`;
+}
+
+/**
  * Reads a sandbox image as a viewable artifact so `read_file` can hand the
  * bytes to vision-capable models instead of refusing them. Fetches the file
  * base64-encoded from the sandbox (`readSandboxImage`), verifies the decoded
  * length matches the size the sandbox reported (guards against codeapi
  * truncating a large `/exec` stdout into a corrupt image), sniffs the real
- * MIME, and returns the shared image-artifact result. Degrades to the
- * text-oriented binary hint when the reader is unavailable, the image is
- * over the inline cap, or the read fails — never throws.
+ * MIME, and returns the shared image-artifact result. Never throws: a
+ * mislabeled or corrupt image degrades to the binary hint, while a failed
+ * read reports what actually went wrong (see {@link buildImageReadError}).
  */
 async function handleSandboxImageRead(
   tc: ToolCallRequest,
@@ -1866,6 +2114,7 @@ async function handleSandboxImageRead(
   req?: ServerRequest,
   codeExecutionContext?: CodeExecutionContext,
   onSuccess?: () => void,
+  signal?: AbortSignal,
 ): Promise<ToolExecuteResult> {
   const filtered = filteredBinaryFileResult(tc, req, filePath);
   if (filtered != null) {
@@ -1879,25 +2128,35 @@ async function handleSandboxImageRead(
     content: '',
     errorMessage: buildBinaryFileError(filePath, ext),
   });
+  const readFailure = (reason: string): ToolExecuteResult => ({
+    toolCallId: tc.id,
+    status: 'error',
+    content: '',
+    errorMessage: buildImageReadError(filePath, reason),
+  });
   if (!readSandboxImage) {
     return binaryHint();
   }
 
   const ctx = tc.codeSessionContext as SandboxSessionContext | undefined;
-  let read: { base64: string; bytes: number } | { tooLarge: true; bytes: number } | null;
+  let read:
+    | { base64: string; bytes: number }
+    | { tooLarge: true; reason?: 'size' | 'round_trips'; bytes: number; inlineCeiling?: number }
+    | null;
   try {
     read = await readSandboxImage({
       file_path: filePath,
       session_id: ctx?.session_id,
       files: ctx?.files,
       maxBytes: MAX_SANDBOX_INLINE_IMAGE_BYTES,
+      ...(signal ? { signal } : {}),
       ...codeExecutionRequestParams(codeExecutionContext),
       ...(req ? { req } : {}),
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = getThrownValueMessage(error);
     logger.warn(`[handleReadFileCall] Sandbox image read failed for "${filePath}": ${message}`);
-    return binaryHint();
+    return readFailure(message);
   }
 
   if (!read) {
@@ -1905,10 +2164,22 @@ async function handleSandboxImageRead(
   }
   if ('tooLarge' in read) {
     onSuccess?.();
+    /* Name the size that would actually work: each window costs one sandbox
+     * execution, so what can be inlined depends on the runner's stdout
+     * budget, not only on the byte cap. Without a target the model can only
+     * guess how far to downscale. */
+    const ceiling =
+      read.reason === 'round_trips' && read.inlineCeiling != null
+        ? read.inlineCeiling
+        : MAX_SANDBOX_INLINE_IMAGE_BYTES;
+    const overBudget =
+      read.reason === 'round_trips'
+        ? `more than this sandbox can return inline (about ${ceiling} bytes)`
+        : `over the ${MAX_SANDBOX_INLINE_IMAGE_BYTES}-byte inline limit`;
     return {
       toolCallId: tc.id,
       status: 'success',
-      content: `Image "${filePath}" is ${read.bytes} bytes, over the ${MAX_SANDBOX_INLINE_IMAGE_BYTES}-byte inline limit. Use \`bash_tool\` to process it (e.g. \`file ${filePath}\` for metadata).`,
+      content: `Image "${filePath}" is ${read.bytes} bytes, ${overBudget}. Downscale it under ${ceiling} bytes in the sandbox with \`bash_tool\` and read the smaller copy to view it, or inspect it with \`bash_tool\` (e.g. \`file ${filePath}\` for metadata).`,
     };
   }
 
@@ -1917,7 +2188,9 @@ async function handleSandboxImageRead(
     logger.warn(
       `[handleReadFileCall] Sandbox image byte mismatch for "${filePath}" (decoded ${buffer.length} != reported ${read.bytes})`,
     );
-    return binaryHint();
+    return readFailure(
+      `the sandbox returned ${buffer.length} of ${read.bytes} bytes (truncated transfer)`,
+    );
   }
   // Resolve the MIME from the actual bytes, never the extension: a file
   // routed here by its `.png`/`.jpg`/... name whose header matches none of
@@ -1959,10 +2232,20 @@ async function handleSandboxFileFallback(
   req?: ServerRequest,
   codeExecutionContext?: CodeExecutionContext,
   onSuccess?: () => void,
+  signal?: AbortSignal,
 ): Promise<ToolExecuteResult> {
   const ext = lowercaseExtension(filePath);
   if (SANDBOX_IMAGE_EXTENSIONS.has(ext)) {
-    return handleSandboxImageRead(tc, filePath, ext, options, req, codeExecutionContext, onSuccess);
+    return handleSandboxImageRead(
+      tc,
+      filePath,
+      ext,
+      options,
+      req,
+      codeExecutionContext,
+      onSuccess,
+      signal,
+    );
   }
   const filteredName = filteredFileNameResult(tc, req, filePath);
   if (filteredName != null) {
@@ -1987,6 +2270,10 @@ async function handleSandboxFileFallback(
     };
   }
 
+  const rangeArgs = tc.args as ReadFileRangeArguments;
+  const ranged = rangeArgs.start_line !== undefined || rangeArgs.max_lines !== undefined;
+  if (ranged && resolveReadFileRange(rangeArgs) == null)
+    return errorResult(tc, READ_FILE_RANGE_ERROR);
   const ctx = tc.codeSessionContext as SandboxSessionContext | undefined;
   try {
     const result = await readSandboxFile({
@@ -1995,7 +2282,20 @@ async function handleSandboxFileFallback(
       files: ctx?.files,
       ...codeExecutionRequestParams(codeExecutionContext),
       ...(req ? { req } : {}),
+      ...(ranged ? { maxBytes: MAX_READABLE_BYTES, ...(signal ? { signal } : {}) } : {}),
     });
+    if (result != null && 'tooLarge' in result) {
+      return errorResult(
+        tc,
+        `Sandbox file could not be retrieved completely within the ${MAX_READABLE_BYTES}-byte read budget. Use bash_tool to inspect it.`,
+      );
+    }
+    if (ranged && result != null && result.complete !== true) {
+      return errorResult(
+        tc,
+        'Sandbox text retrieval was incomplete. Use bash_tool to inspect the file.',
+      );
+    }
     if (!result || result.content == null) {
       return {
         toolCallId: tc.id,
@@ -2025,13 +2325,18 @@ async function handleSandboxFileFallback(
      * and surface the truncation to the model so it can use
      * `bash_tool head` / `tail` for the rest.
      */
+    if (ranged) {
+      const rangedResult = localTextReadResult(tc, filePath, result.content);
+      if (rangedResult.status === 'success') onSuccess?.();
+      return rangedResult;
+    }
     let payload = result.content;
     let truncated = false;
     if (payload.length > MAX_READABLE_BYTES) {
       payload = payload.slice(0, MAX_READABLE_BYTES);
       truncated = true;
     }
-    let numbered = addLineNumbers(payload);
+    let numbered = formatReadFileText(payload, filePath);
     if (truncated) {
       numbered += `\n\n[truncated at ${MAX_READABLE_BYTES} bytes — use \`bash_tool\` (e.g. \`head -c\` / \`tail\`) to read the rest of "${filePath}"]`;
     }
@@ -2042,6 +2347,7 @@ async function handleSandboxFileFallback(
       content: numbered,
     };
   } catch (error) {
+    if (signal?.aborted === true && isAbortError(error)) throw error;
     const message = error instanceof Error ? error.message : String(error);
     logger.warn('[handleReadFileCall] Sandbox fallback failed', getSafeErrorMetadata(error));
     return {
@@ -2050,6 +2356,313 @@ async function handleSandboxFileFallback(
       content: '',
       errorMessage: `Error reading "${filePath}" from the code-execution sandbox: ${message}. Try \`bash_tool\` (e.g. \`cat ${filePath}\`).`,
     };
+  }
+}
+
+async function handleWorkspaceFileRead(
+  tc: ToolCallRequest,
+  filePath: string,
+  options: ToolExecuteOptions,
+  req: ServerRequest | undefined,
+  codeExecutionContext: CodeExecutionContext,
+  signal?: AbortSignal,
+): Promise<ToolExecuteResult> {
+  const { readWorkspaceFile } = options;
+  if (!readWorkspaceFile) {
+    return {
+      toolCallId: tc.id,
+      status: 'error',
+      content: '',
+      errorMessage: 'Attached workspace reading is not configured.',
+    };
+  }
+  const workspaceId = selectedWorkspaceId(codeExecutionContext, 'read_file');
+  if (!workspaceId) return unavailableWorkspaceOperation(tc, 'read_file');
+  const args = tc.args as { start_line?: number; max_lines?: number };
+  const range = resolveReadFileRange(
+    args,
+    resolveAttachedWorkspaceReadFileLines(codeExecutionContext.codeEnvironmentConfigSchema),
+  );
+  if (filePath.length === 0) {
+    return {
+      toolCallId: tc.id,
+      status: 'error',
+      content: '',
+      errorMessage: 'A relative path after workspace/ is required.',
+    };
+  }
+  if (range == null) return errorResult(tc, READ_FILE_RANGE_ERROR);
+  const filteredName = filteredFileNameResult(tc, req, filePath);
+  if (filteredName != null) {
+    return filteredName;
+  }
+
+  try {
+    const result = await readWorkspaceFile({
+      file_path: filePath,
+      workspace_id: workspaceId,
+      ...(codeExecutionContext.codeWorkspace?.workspaceInstanceId
+        ? { workspace_instance_id: codeExecutionContext.codeWorkspace.workspaceInstanceId }
+        : {}),
+      ...(codeExecutionContext.codeWorkspace?.linkedWorktrees ? { linked_worktrees: true } : {}),
+      start_line: range.startLine,
+      max_lines: range.maxLines,
+      codeApiBaseUrl: codeExecutionContext.baseUrl,
+      ...attachedWorkspaceRequestLimits(codeExecutionContext),
+      executionProfile: codeExecutionContext.executionProfile,
+      ...(codeExecutionContext.bridgeWorkerId
+        ? { bridgeWorkerId: codeExecutionContext.bridgeWorkerId }
+        : {}),
+      ...(req ? { req } : {}),
+      ...(signal ? { signal } : {}),
+    });
+    const filtered = filteredFileResult(tc, req, filePath, result.content);
+    if (filtered != null) {
+      return filtered;
+    }
+    if (looksBinary(result.content)) {
+      return {
+        toolCallId: tc.id,
+        status: 'error',
+        content: '',
+        errorMessage: `"${filePath}" appears to be a binary file and cannot be read as text.`,
+      };
+    }
+    return successResult(
+      tc,
+      formatReadFileText(result.content, `workspace/${filePath}`, undefined, {
+        startLine: result.startLine,
+        ...(result.truncated && result.nextStartLine != null
+          ? { nextStartLine: result.nextStartLine }
+          : {}),
+      }),
+    );
+  } catch (error) {
+    if (error instanceof WorkspaceToolHttpError) {
+      throw explainWorkspacePathRejection(error, 'read', `workspace/${filePath}`);
+    }
+    if (signal?.aborted === true && isAbortError(error)) throw error;
+    logger.warn(
+      '[handleWorkspaceFileRead] Attached workspace read failed',
+      getSafeErrorMetadata(error),
+    );
+    return {
+      toolCallId: tc.id,
+      status: 'error',
+      content: '',
+      errorMessage: `"${filePath}" could not be read from the attached workspace.`,
+    };
+  }
+}
+
+async function handleWorkspaceSearchCall(
+  tc: ToolCallRequest,
+  mergedConfigurable: Record<string, unknown> | undefined,
+  options: ToolExecuteOptions,
+  req: ServerRequest | undefined,
+  signal?: AbortSignal,
+): Promise<ToolExecuteResult> {
+  const codeExecutionContext = getCodeExecutionContext(mergedConfigurable ?? {});
+  if (
+    mergedConfigurable?.codeEnvAvailable !== true ||
+    codeExecutionContext?.environmentType !== 'attached'
+  ) {
+    return errorResult(tc, 'search_workspace requires an attached code environment.');
+  }
+  if (!options.searchWorkspace) {
+    return errorResult(tc, 'Attached workspace search is not configured.');
+  }
+  const workspaceId = selectedWorkspaceId(codeExecutionContext, 'search_text');
+  if (!workspaceId) return unavailableWorkspaceOperation(tc, 'search_text');
+
+  const args = tc.args as { query?: unknown; path?: unknown; max_results?: unknown };
+  const maxResults = args.max_results ?? 50;
+  if (
+    typeof args.query !== 'string' ||
+    args.query.length === 0 ||
+    args.query.length > 4096 ||
+    (args.path != null && typeof args.path !== 'string') ||
+    !Number.isSafeInteger(maxResults) ||
+    Number(maxResults) < 1 ||
+    Number(maxResults) > 200
+  ) {
+    return errorResult(tc, 'query, path, or max_results is invalid for workspace search.');
+  }
+
+  try {
+    const result = await options.searchWorkspace({
+      query: args.query,
+      workspace_id: workspaceId,
+      ...(codeExecutionContext.codeWorkspace?.workspaceInstanceId
+        ? { workspace_instance_id: codeExecutionContext.codeWorkspace.workspaceInstanceId }
+        : {}),
+      ...(codeExecutionContext.codeWorkspace?.linkedWorktrees ? { linked_worktrees: true } : {}),
+      ...(typeof args.path === 'string' && args.path.length > 0 ? { path: args.path } : {}),
+      max_results: Number(maxResults),
+      codeApiBaseUrl: codeExecutionContext.baseUrl,
+      ...attachedWorkspaceRequestLimits(codeExecutionContext),
+      executionProfile: codeExecutionContext.executionProfile,
+      ...(codeExecutionContext.bridgeWorkerId
+        ? { bridgeWorkerId: codeExecutionContext.bridgeWorkerId }
+        : {}),
+      ...(req ? { req } : {}),
+      ...(signal ? { signal } : {}),
+    });
+
+    for (const match of result.matches) {
+      const filtered = filteredFileResult(tc, req, match.path, match.text);
+      if (filtered != null) return filtered;
+    }
+    const unboundedContent =
+      result.matches.length === 0
+        ? 'No matches found.'
+        : result.matches
+            .map((match) => `workspace/${match.path}:${match.line}:${match.column}: ${match.text}`)
+            .join('\n');
+    const truncationNotice = '\n\n[results truncated]';
+    const locallyTruncated = Buffer.byteLength(unboundedContent, 'utf8') > MAX_READABLE_BYTES;
+    const truncated = locallyTruncated || result.truncated;
+    const content = truncated
+      ? truncateUtf8(
+          unboundedContent,
+          MAX_READABLE_BYTES - Buffer.byteLength(truncationNotice, 'utf8'),
+        )
+      : unboundedContent;
+    return {
+      toolCallId: tc.id,
+      status: 'success',
+      content: truncated ? `${content}${truncationNotice}` : content,
+    };
+  } catch (error) {
+    if (error instanceof WorkspaceToolHttpError) {
+      throw explainWorkspacePathRejection(
+        error,
+        'search',
+        `workspace/${typeof args.path === 'string' ? args.path : ''}`,
+      );
+    }
+    if (signal?.aborted === true && isAbortError(error)) throw error;
+    logger.warn(
+      '[handleWorkspaceSearchCall] Attached workspace search failed',
+      getSafeErrorMetadata(error),
+    );
+    return errorResult(tc, 'The attached workspace could not be searched.');
+  }
+}
+
+async function handleWorkspaceListCall(
+  tc: ToolCallRequest,
+  mergedConfigurable: Record<string, unknown> | undefined,
+  options: ToolExecuteOptions,
+  req: ServerRequest | undefined,
+  signal?: AbortSignal,
+): Promise<ToolExecuteResult> {
+  const codeExecutionContext = getCodeExecutionContext(mergedConfigurable ?? {});
+  if (
+    mergedConfigurable?.codeEnvAvailable !== true ||
+    codeExecutionContext?.environmentType !== 'attached'
+  ) {
+    return errorResult(tc, 'list_workspace_files requires an attached code environment.');
+  }
+  if (!options.listWorkspaceFiles) {
+    return errorResult(tc, 'Attached workspace file listing is not configured.');
+  }
+  const workspaceId = selectedWorkspaceId(codeExecutionContext, 'list_files');
+  if (!workspaceId) return unavailableWorkspaceOperation(tc, 'list_files');
+
+  const args = tc.args as { path?: unknown; after_path?: unknown; max_results?: unknown };
+  const maxResults = args.max_results ?? 100;
+  if (
+    (args.path != null && typeof args.path !== 'string') ||
+    (args.after_path != null && typeof args.after_path !== 'string') ||
+    !Number.isSafeInteger(maxResults) ||
+    Number(maxResults) < 1 ||
+    Number(maxResults) > 500
+  ) {
+    return errorResult(
+      tc,
+      'path, after_path, or max_results is invalid for workspace file listing.',
+    );
+  }
+
+  try {
+    const result = await options.listWorkspaceFiles({
+      workspace_id: workspaceId,
+      ...(codeExecutionContext.codeWorkspace?.workspaceInstanceId
+        ? { workspace_instance_id: codeExecutionContext.codeWorkspace.workspaceInstanceId }
+        : {}),
+      ...(codeExecutionContext.codeWorkspace?.linkedWorktrees ? { linked_worktrees: true } : {}),
+      ...(typeof args.path === 'string' && args.path.length > 0 ? { path: args.path } : {}),
+      ...(typeof args.after_path === 'string' && args.after_path.length > 0
+        ? { after_path: args.after_path }
+        : {}),
+      max_results: Number(maxResults),
+      codeApiBaseUrl: codeExecutionContext.baseUrl,
+      ...attachedWorkspaceRequestLimits(codeExecutionContext),
+      executionProfile: codeExecutionContext.executionProfile,
+      ...(codeExecutionContext.bridgeWorkerId
+        ? { bridgeWorkerId: codeExecutionContext.bridgeWorkerId }
+        : {}),
+      ...(req ? { req } : {}),
+      ...(signal ? { signal } : {}),
+    });
+
+    for (const path of result.paths) {
+      const filtered = filteredFileNameResult(tc, req, path);
+      if (filtered != null) return filtered;
+    }
+    if (result.paths.length === 0) {
+      return {
+        toolCallId: tc.id,
+        status: 'success',
+        content: 'The attached workspace contains no discoverable files in that path.',
+      };
+    }
+    const renderedPaths: string[] = [];
+    let content = '';
+    let contentBytes = 0;
+    for (const [index, path] of result.paths.entries()) {
+      const entry = `workspace/${path}`;
+      const separator = renderedPaths.length > 0 ? '\n' : '';
+      const hasMore = index < result.paths.length - 1 || result.truncated;
+      const notice = hasMore
+        ? `\n\n[results truncated; continue with after_path: ${JSON.stringify(path)}]`
+        : '';
+      const entryBytes = Buffer.byteLength(`${separator}${entry}`, 'utf8');
+      if (contentBytes + entryBytes + Buffer.byteLength(notice, 'utf8') > MAX_READABLE_BYTES) {
+        break;
+      }
+      renderedPaths.push(entry);
+      content += `${separator}${entry}`;
+      contentBytes += entryBytes;
+    }
+    const locallyTruncated = renderedPaths.length < result.paths.length;
+    const continuationPath = locallyTruncated
+      ? result.paths[renderedPaths.length - 1]
+      : result.nextAfterPath;
+    const truncated = locallyTruncated || result.truncated;
+    const truncationNotice = truncated
+      ? `\n\n[results truncated; continue with after_path: ${JSON.stringify(continuationPath)}]`
+      : '';
+    return {
+      toolCallId: tc.id,
+      status: 'success',
+      content: `${content}${truncationNotice}`,
+    };
+  } catch (error) {
+    if (error instanceof WorkspaceToolHttpError) {
+      throw explainWorkspacePathRejection(
+        error,
+        'list',
+        `workspace/${typeof args.path === 'string' ? args.path : ''}`,
+      );
+    }
+    if (signal?.aborted === true && isAbortError(error)) throw error;
+    logger.warn(
+      '[handleWorkspaceListCall] Attached workspace file listing failed',
+      getSafeErrorMetadata(error),
+    );
+    return errorResult(tc, 'The attached workspace files could not be listed.');
   }
 }
 
@@ -2069,6 +2682,24 @@ function cloneSandboxSessionContext(
   };
 }
 
+/** Storage identity of a mounted ref, matching the code session's own key. */
+function sandboxFileIdentity(file: SandboxFileRef): string {
+  return `${file.storage_session_id ?? ''}\0${file.id}`;
+}
+
+/**
+ * Folds a host file-authoring result's `session_id` / `files` into the
+ * batch-local sandbox context that the next authoring call on the same path
+ * reuses, matching how the graph's own code session folds the same artifact:
+ * incoming refs win field by field, an existing ref superseded by storage
+ * identity or by name is dropped, and every other mounted ref survives.
+ *
+ * Both halves are load-bearing. Rebuilding refs from a field subset dropped
+ * `kind`, `resource_id`, `version` and `inherited`, and a primed skill file
+ * stripped of its `version` is an invalid input ref — the Code API requires
+ * it whenever `kind === 'skill'`. Replacing the list wholesale unmounted
+ * every file the run had primed but this particular write did not return.
+ */
 function mergeSandboxSessionArtifact(
   context: SandboxSessionContext,
   artifact: ToolExecuteResult['artifact'],
@@ -2087,41 +2718,68 @@ function mergeSandboxSessionArtifact(
     return;
   }
 
-  const files: SandboxSessionContext['files'] = [];
+  const execSessionId = context.session_id;
+  const incoming: SandboxFileRef[] = [];
+  const incomingByIdentity = new Map<string, number>();
+  const incomingNames = new Set<string>();
   for (const file of value.files) {
     if (!file || typeof file !== 'object') {
       continue;
     }
-    const ref = file as {
-      id?: unknown;
-      name?: unknown;
-      session_id?: unknown;
-      storage_session_id?: unknown;
-    };
+    const ref = file as SandboxFileRef;
     if (typeof ref.id !== 'string' || typeof ref.name !== 'string') {
       continue;
     }
-    files.push({
-      id: ref.id,
-      name: ref.name,
-      ...(typeof ref.session_id === 'string' ? { session_id: ref.session_id } : {}),
-      ...(typeof ref.storage_session_id === 'string'
-        ? { storage_session_id: ref.storage_session_id }
-        : {}),
-    });
+    /* Carry the ref whole: the Code API reads fields this host never
+     * inspects, so a copy is a downgrade. Only the storage session is
+     * defaulted, and it resolves exactly as `getPreparedCodeOutputBuffer`
+     * resolves it — the legacy per-file `session_id` outranks the execution
+     * session, or an older Code API response would be remounted against the
+     * bucket that merely produced it. */
+    const merged: SandboxFileRef = { ...ref };
+    merged.storage_session_id ??= ref.session_id ?? execSessionId;
+
+    /* One artifact can name the same stored file twice. Fold the repeat into
+     * the entry already collected rather than mounting it again: codeapi
+     * rejects an `/exec` whose files collide on a destination, taking the
+     * whole call down with it. */
+    const identity = sandboxFileIdentity(merged);
+    const seen = incomingByIdentity.get(identity);
+    if (seen !== undefined) {
+      incoming[seen] = { ...incoming[seen], ...merged };
+      continue;
+    }
+    incomingByIdentity.set(identity, incoming.length);
+    incomingNames.add(merged.name);
+    incoming.push(merged);
   }
-  if (files.length > 0) {
-    context.files = files;
+  if (incoming.length === 0) {
+    return;
   }
+
+  const retained: SandboxFileRef[] = [];
+  for (const existing of context.files ?? []) {
+    const index = incomingByIdentity.get(sandboxFileIdentity(existing));
+    if (index !== undefined) {
+      incoming[index] = { ...existing, ...incoming[index] };
+      continue;
+    }
+    if (!incomingNames.has(existing.name)) {
+      retained.push(existing);
+    }
+  }
+  context.files = [...retained, ...incoming];
 }
 
+/**
+ * Broader than {@link isMissingSandboxPathError}: the authoring flow also
+ * treats a bare "not found" as an absent file, because a `cat` that cannot
+ * start is indistinguishable from a `cat` that found nothing as far as
+ * "should this create or overwrite?" is concerned.
+ */
 function isSandboxMissingFileError(error: unknown): boolean {
-  const message = getThrownValueMessage(error).toLowerCase();
-  return (
-    message.includes('no such file or directory') ||
-    message.includes('cannot access') ||
-    message.includes('not found')
-  );
+  const message = getThrownValueMessage(error);
+  return isMissingSandboxPathError(message) || message.toLowerCase().includes('not found');
 }
 
 function invalidSandboxAuthoringPath(filePath: string): string | null {
@@ -2172,6 +2830,12 @@ async function loadSandboxTextForAuthoring({
       ...codeExecutionRequestParams(codeExecutionContext),
       ...(req ? { req } : {}),
     });
+    if (result != null && 'tooLarge' in result) {
+      return {
+        status: 'error',
+        message: 'Sandbox file could not be retrieved completely. Use bash_tool to inspect it.',
+      };
+    }
     if (!result || result.content == null) {
       return {
         status: 'error',
@@ -2221,6 +2885,7 @@ async function writeSandboxTextForAuthoring({
   created,
   sandboxContext,
   codeExecutionContext,
+  signal,
 }: {
   tc: ToolCallRequest;
   options: ToolExecuteOptions;
@@ -2231,6 +2896,7 @@ async function writeSandboxTextForAuthoring({
   created: boolean;
   sandboxContext?: SandboxSessionContext;
   codeExecutionContext?: CodeExecutionContext;
+  signal?: AbortSignal;
 }): AuthoringResult {
   if (!options.writeSandboxFile) {
     return errorResult(
@@ -2253,6 +2919,7 @@ async function writeSandboxTextForAuthoring({
   }
   const ctx = sandboxSessionContext(tc, sandboxContext);
   let writeResult: Awaited<ReturnType<NonNullable<ToolExecuteOptions['writeSandboxFile']>>>;
+  signal?.throwIfAborted();
   try {
     writeResult = await options.writeSandboxFile({
       file_path: filePath,
@@ -2263,6 +2930,7 @@ async function writeSandboxTextForAuthoring({
       ...(req ? { req } : {}),
     });
   } catch (error) {
+    if (signal?.aborted === true && isAbortError(error)) throw error;
     const message = getThrownValueMessage(error);
     logger.warn('[file_authoring] Sandbox write failed', getSafeErrorMetadata(error));
     return errorResult(
@@ -2272,6 +2940,13 @@ async function writeSandboxTextForAuthoring({
   }
   if (!writeResult) {
     return errorResult(tc, `Failed to write "${filePath}" to the code-execution sandbox.`);
+  }
+  if (writeResult.artifact_delivery) {
+    const { attempted, failed } = writeResult.artifact_delivery;
+    return errorResult(
+      tc,
+      `Wrote "${filePath}" in the sandbox, but ${failed} of ${attempted} generated files could not be persisted. The file is not guaranteed to be available to later calls or downloadable. The execution may have had side effects; do not retry automatically.`,
+    );
   }
 
   const action = created ? 'Created' : 'Updated';
@@ -2299,9 +2974,10 @@ async function resolveSkillForAuthoring(
 
   const skillPrimedIdsByName =
     (mergedConfigurable?.skillPrimedIdsByName as Record<string, string> | undefined) ?? {};
-  const primedIdString = skillPrimedIdsByName[skillName];
-  if (primedIdString) {
-    return await getSkillByName(skillName, [new Types.ObjectId(primedIdString)], {});
+  const pinnedIdString =
+    getAuthoredSkillId(skillName, mergedConfigurable) ?? skillPrimedIdsByName[skillName];
+  if (pinnedIdString) {
+    return await getSkillByName(skillName, [new Types.ObjectId(pinnedIdString)], {});
   }
 
   const accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
@@ -2332,10 +3008,12 @@ async function resolveAuthorSkillForCurrentUser({
     return null;
   }
   const skill = await options.getAuthorSkillByName({ req, name: skillName });
-  if (!skill) {
+  const authoredId = getAuthoredSkillId(skillName, mergedConfigurable);
+  if (!skill || (authoredId != null && skill._id.toString() !== authoredId)) {
     return null;
   }
   rememberAuthoredSkill([mergedConfigurable, sourceConfigurable], skill, { prime: false });
+  options.onSkillAuthored?.({ name: skill.name, id: skill._id.toString(), primed: false });
   return skill;
 }
 
@@ -2349,6 +3027,23 @@ function isDuplicateSkillNameError(error: unknown): boolean {
 
 function isSkillAuthoringAvailable(mergedConfigurable: Record<string, unknown>): boolean {
   return mergedConfigurable.skillAuthoringAvailable === true;
+}
+
+/**
+ * Tells the model that the skill it just created is a legal `skill` target.
+ * Creation neither loads nor activates the skill, so the run has no other
+ * signal that the name became invocable. Only reachable on runs that can
+ * author skills, which are exactly the runs where the `skill` tool is
+ * registered (see `isSkillToolAvailable`).
+ *
+ * Suppressed for `disable-model-invocation: true`, which
+ * `handleSkillToolCall` rejects — advertising it would send the model into a
+ * guaranteed error.
+ */
+function authoredSkillInvocationHint(frontmatter: Record<string, unknown> | undefined): string {
+  return deriveStructuredFrontmatterFields(frontmatter).disableModelInvocation === true
+    ? ''
+    : ' Invoke it with the skill tool when you want its instructions loaded.';
 }
 
 function getFileAuthoringToolNames(
@@ -2378,7 +3073,9 @@ function isSkillPrimedForAuthoring(
 ): boolean {
   const skillPrimedIdsByName =
     (mergedConfigurable.skillPrimedIdsByName as Record<string, string> | undefined) ?? {};
-  return typeof skillPrimedIdsByName[skillName] === 'string';
+  const primedId = skillPrimedIdsByName[skillName];
+  const authoredId = getAuthoredSkillId(skillName, mergedConfigurable);
+  return typeof primedId === 'string' && (authoredId == null || authoredId === primedId);
 }
 
 function isSkillKnownToCurrentRun(
@@ -2443,6 +3140,36 @@ function mergeSkillPrimedIdsByName(
   const basePrimed = base?.skillPrimedIdsByName as Record<string, string> | undefined;
   const merged = { ...(loadedPrimed ?? {}), ...(basePrimed ?? {}) };
   return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function mergeAuthoredSkillIdsByName(
+  base: Record<string, unknown> | undefined,
+  loaded: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  const loadedAuthored = loaded?.authoredSkillIdsByName as Record<string, string> | undefined;
+  const baseAuthored = base?.authoredSkillIdsByName as Record<string, string> | undefined;
+  const merged = { ...(loadedAuthored ?? {}), ...(baseAuthored ?? {}) };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+/**
+ * The `_id` this run's authoring path bound to a skill name, when it bound one.
+ *
+ * Deliberately separate from `skillPrimedIdsByName`: that map also carries
+ * manual (`$`) and always-apply primes and doubles as the switch that relaxes
+ * the `disable-model-invocation` gate for primed bodies, so widening its
+ * meaning would change how those primes resolve. This map carries identity
+ * only, for the names this run authored.
+ */
+function getAuthoredSkillId(
+  skillName: string,
+  mergedConfigurable: Record<string, unknown> | undefined,
+): string | undefined {
+  const authoredIds = mergedConfigurable?.authoredSkillIdsByName as
+    | Record<string, string>
+    | undefined;
+  const id = authoredIds?.[skillName];
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
 function mergeActiveSkillNames(
@@ -2567,6 +3294,10 @@ function mergeToolConfigurables(
   if (skillPrimedIdsByName) {
     merged.skillPrimedIdsByName = skillPrimedIdsByName;
   }
+  const authoredSkillIdsByName = mergeAuthoredSkillIdsByName(base, loaded);
+  if (authoredSkillIdsByName) {
+    merged.authoredSkillIdsByName = authoredSkillIdsByName;
+  }
   const activeSkillNames = mergeActiveSkillNames(base, loaded);
   if (activeSkillNames) {
     merged.activeSkillNames = activeSkillNames;
@@ -2602,6 +3333,18 @@ function rememberAuthoredSkill(
       primedIds[skill.name] = idString;
       configurable.skillPrimedIdsByName = primedIds;
     }
+
+    /**
+     * Recorded for every authoring resolution, including `prime: false`
+     * recovery: both mean this run's authoring path bound this name to this
+     * doc, which is the doc invocation has to load. Unlike the primed map this
+     * grants no gate relaxation, so recording it during recovery cannot let a
+     * `disable-model-invocation: true` skill slip past its gate.
+     */
+    const authoredIds =
+      (configurable.authoredSkillIdsByName as Record<string, string> | undefined) ?? {};
+    authoredIds[skill.name] = idString;
+    configurable.authoredSkillIdsByName = authoredIds;
 
     const activeSkillNames = configurable.activeSkillNames as Set<string> | undefined;
     if (activeSkillNames) {
@@ -2679,6 +3422,7 @@ async function loadSkillFileTextForAuthoring({
       status: 'loaded',
       content: file.content,
       bytes: Buffer.byteLength(file.content, 'utf8'),
+      fileId: file.file_id,
     };
   }
   if (file.bytes > MAX_CACHE_BYTES) {
@@ -2696,7 +3440,7 @@ async function loadSkillFileTextForAuthoring({
     return { status: 'error', message: 'Download is not supported for this storage backend.' };
   }
 
-  const stream = await strategy.getDownloadStream(req, file.filepath);
+  const stream = await strategy.getDownloadStream(req, resolveDownloadPath(file));
   const chunks: Uint8Array[] = [];
   let streamedBytes = 0;
   for await (const chunk of stream as AsyncIterable<Uint8Array>) {
@@ -2721,7 +3465,7 @@ async function loadSkillFileTextForAuthoring({
   for (let i = 0; i < checkLen; i++) {
     if (buffer[i] === 0) {
       if (updateSkillFileContent) {
-        updateSkillFileContent(skill._id, relativePath, { isBinary: true }).catch(
+        updateSkillFileContent(skill._id, relativePath, { isBinary: true }, file.file_id).catch(
           (err: unknown) => {
             logAxiosError({
               message: '[loadSkillFileTextForAuthoring] cache write failed',
@@ -2736,16 +3480,19 @@ async function loadSkillFileTextForAuthoring({
 
   const text = buffer.toString('utf-8');
   if (updateSkillFileContent) {
-    updateSkillFileContent(skill._id, relativePath, { content: text, isBinary: false }).catch(
-      (err: unknown) => {
-        logAxiosError({
-          message: '[loadSkillFileTextForAuthoring] cache write failed',
-          error: err,
-        });
-      },
-    );
+    updateSkillFileContent(
+      skill._id,
+      relativePath,
+      { content: text, isBinary: false },
+      file.file_id,
+    ).catch((err: unknown) => {
+      logAxiosError({
+        message: '[loadSkillFileTextForAuthoring] cache write failed',
+        error: err,
+      });
+    });
   }
-  return { status: 'loaded', content: text, bytes: buffer.length };
+  return { status: 'loaded', content: text, bytes: buffer.length, fileId: file.file_id };
 }
 
 async function inspectBundledSkillFileForCreate({
@@ -2769,13 +3516,13 @@ async function inspectBundledSkillFileForCreate({
     return { status: 'missing' };
   }
   if (file.isBinary === true || file.bytes > MAX_CACHE_BYTES) {
-    return { status: 'present' };
+    return { status: 'present', fileId: file.file_id };
   }
   if (file.content != null && file.content !== '') {
-    return { status: 'present', oldContent: file.content };
+    return { status: 'present', oldContent: file.content, fileId: file.file_id };
   }
   if (!options.getStrategyFunctions || !req) {
-    return { status: 'present' };
+    return { status: 'present', fileId: file.file_id };
   }
 
   const loaded = await loadSkillFileTextForAuthoring({
@@ -2788,9 +3535,9 @@ async function inspectBundledSkillFileForCreate({
     return { status: 'missing' };
   }
   if (loaded.status === 'error') {
-    return { status: 'present' };
+    return { status: 'present', fileId: file.file_id };
   }
-  return { status: 'present', oldContent: loaded.content };
+  return { status: 'present', oldContent: loaded.content, fileId: loaded.fileId };
 }
 
 async function ensureBundledSkillVersionCurrent({
@@ -2830,6 +3577,7 @@ async function writeSkillMd({
   skill,
   skillName,
   content,
+  signal,
 }: {
   tc: ToolCallRequest;
   options: ToolExecuteOptions;
@@ -2839,6 +3587,7 @@ async function writeSkillMd({
   skill: AuthoringSkill | null;
   skillName: string;
   content: string;
+  signal?: AbortSignal;
 }): AuthoringResult {
   const normalized = normalizeSkillMdContent(content, skillName);
   if (normalized.status === 'error') {
@@ -2901,19 +3650,34 @@ async function writeSkillMd({
       await options.grantSkillOwner({ req, skillId: result.skill._id });
     } catch (error) {
       if (options.deleteSkill) {
-        await options.deleteSkill(result.skill._id.toString()).catch((rollbackError: unknown) => {
-          logger.error('[create_file] Failed to roll back skill after permission error', {
-            rollbackError,
+        await deleteSkillWithRetry(options.deleteSkill, result.skill._id.toString())
+          .then((deletion) => {
+            if (!deletion.cleanupComplete) {
+              logger.error('[create_file] Skill rollback left dependent cleanup incomplete', {
+                skillId: result.skill._id.toString(),
+                failedCleanupSteps: deletion.failedCleanupSteps,
+              });
+            }
+          })
+          .catch((rollbackError: unknown) => {
+            logger.error('[create_file] Failed to roll back skill after permission error', {
+              rollbackError,
+            });
           });
-        });
       }
       throw error;
     }
     rememberAuthoredSkill([mergedConfigurable, sourceConfigurable], result.skill);
+    options.onSkillAuthored?.({
+      name: result.skill.name,
+      id: result.skill._id.toString(),
+      primed: true,
+    });
     const surfacedWarnings = surfaceSkillAuthoringWarnings(result.warnings);
+    const invocationHint = authoredSkillInvocationHint(structured.frontmatter);
     return successResult(
       tc,
-      `Created ${SKILL_FILE_PREFIX}${skillName}/${SKILL_MD} (${content.length} chars).${surfacedWarnings?.contentSuffix ?? ''}`,
+      `Created ${SKILL_FILE_PREFIX}${skillName}/${SKILL_MD} (${content.length} chars).${surfacedWarnings?.contentSuffix ?? ''}${invocationHint}`,
       {
         path: `${SKILL_FILE_PREFIX}${skillName}/${SKILL_MD}`,
         bytes_written: Buffer.byteLength(content, 'utf8'),
@@ -2948,6 +3712,7 @@ async function writeSkillMd({
   ) {
     diff = '';
   }
+  signal?.throwIfAborted();
   const result = await options.updateSkill({
     id: skill._id.toString(),
     expectedVersion: skill.version,
@@ -2998,7 +3763,9 @@ async function writeBundledSkillFile({
   displayPath,
   content,
   oldContent,
+  fileId,
   created,
+  signal,
 }: {
   tc: ToolCallRequest;
   options: ToolExecuteOptions;
@@ -3008,7 +3775,9 @@ async function writeBundledSkillFile({
   displayPath: string;
   content: string;
   oldContent?: string;
+  fileId?: string;
   created: boolean;
+  signal?: AbortSignal;
 }): AuthoringResult {
   const editDenied = await ensureCanEditSkill(tc, options, req, skill._id);
   if (editDenied) {
@@ -3016,6 +3785,15 @@ async function writeBundledSkillFile({
   }
   if (!req || !options.saveSkillFileContent) {
     return errorResult(tc, 'Skill file writing is not configured.');
+  }
+  if (skill.source != null && skill.source !== 'inline') {
+    return errorResult(tc, 'Externally managed skill files are read-only.');
+  }
+  if (!created && !fileId) {
+    return errorResult(
+      tc,
+      `File revision unavailable for ${displayPath}. Re-read the file and retry.`,
+    );
   }
   const staleDenied = await ensureBundledSkillVersionCurrent({
     tc,
@@ -3053,13 +3831,31 @@ async function writeBundledSkillFile({
     diff = undefined;
   }
 
-  await options.saveSkillFileContent({
-    req,
-    skillId: skill._id,
-    relativePath,
-    content,
-    mimeType: guessMimeType(relativePath),
-  });
+  try {
+    signal?.throwIfAborted();
+    await options.saveSkillFileContent({
+      req,
+      skillId: skill._id,
+      relativePath,
+      content,
+      mimeType: guessMimeType(relativePath),
+      expectedFileId: fileId,
+      createOnly: created,
+    });
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'SKILL_FILE_CONFLICT') {
+      return errorResult(
+        tc,
+        created
+          ? `File already exists: ${displayPath}. Re-read it and pass overwrite: true to replace.`
+          : `Skill file changed while editing. Re-read ${displayPath} and retry.`,
+      );
+    }
+    if (error instanceof Error && 'code' in error && error.code === 'SKILL_DELETING') {
+      return errorResult(tc, `Skill is being deleted. Re-read ${displayPath} before retrying.`);
+    }
+    throw error;
+  }
   const action = created ? 'Created' : 'Updated';
   const summary = `${action} ${displayPath} (${content.length} chars).`;
   return successResult(tc, diff ? `${summary}\n\n${diff}` : summary, {
@@ -3068,6 +3864,360 @@ async function writeBundledSkillFile({
     created,
     ...(diff ? { diff } : {}),
   });
+}
+
+function attachedWorkspaceAuthoringPath(
+  tc: ToolCallRequest,
+  filePath: string,
+): { filePath: string } | ToolExecuteResult {
+  if (!filePath.startsWith('workspace/')) {
+    return errorResult(tc, 'Attached environment file paths must use "workspace/{relativePath}".');
+  }
+  const relativePath = filePath.slice('workspace/'.length);
+  const pathError = invalidSandboxAuthoringPath(relativePath);
+  return pathError ? errorResult(tc, pathError) : { filePath: relativePath };
+}
+
+function attachedWorkspaceRequestLimits(codeExecutionContext: CodeExecutionContext): {
+  maxQueueWaitMs: number;
+  maxRequestTimeoutMs?: number;
+} & WorkspaceAdmissionOptions {
+  const config = codeExecutionContext.codeEnvironmentConfigSchema;
+  const maxRequestTimeoutMs = resolveAttachedWorkspaceRequestTimeoutMs(config);
+  return {
+    ...resolveAttachedWorkspaceAdmissionOptions(config),
+    maxQueueWaitMs: resolveAttachedWorkspaceQueueWaitMs(config),
+    ...(maxRequestTimeoutMs == null ? {} : { maxRequestTimeoutMs }),
+  };
+}
+
+function attachedWorkspaceMutationParams(
+  codeExecutionContext: CodeExecutionContext,
+  workspaceId: string,
+  req: ServerRequest | undefined,
+  signal: AbortSignal | undefined,
+): {
+  workspace_id: string;
+  workspace_instance_id?: string;
+  linked_worktrees?: boolean;
+  codeApiBaseUrl: string;
+  executionProfile: CodeExecutionContext['executionProfile'];
+  bridgeWorkerId?: string;
+  req?: ServerRequest;
+  signal?: AbortSignal;
+  maxQueueWaitMs: number;
+  maxRequestTimeoutMs?: number;
+  deadlineAtMs?: number;
+} & WorkspaceAdmissionOptions {
+  const limits = attachedWorkspaceRequestLimits(codeExecutionContext);
+  const runTimeoutMs = limits.maxRunTimeoutMs ?? limits.maxRequestTimeoutMs;
+  return {
+    workspace_id: workspaceId,
+    ...(codeExecutionContext.codeWorkspace?.workspaceInstanceId
+      ? { workspace_instance_id: codeExecutionContext.codeWorkspace.workspaceInstanceId }
+      : {}),
+    ...(codeExecutionContext.codeWorkspace?.linkedWorktrees ? { linked_worktrees: true } : {}),
+    codeApiBaseUrl: codeExecutionContext.baseUrl,
+    ...limits,
+    ...(runTimeoutMs == null ? {} : { deadlineAtMs: Date.now() + runTimeoutMs }),
+    executionProfile: codeExecutionContext.executionProfile,
+    ...(codeExecutionContext.bridgeWorkerId
+      ? { bridgeWorkerId: codeExecutionContext.bridgeWorkerId }
+      : {}),
+    ...(req ? { req } : {}),
+    ...(signal ? { signal } : {}),
+  };
+}
+
+async function handleAttachedWorkspaceCreateFileCall({
+  tc,
+  options,
+  req,
+  filePath,
+  content,
+  overwrite,
+  codeExecutionContext,
+  signal,
+}: {
+  tc: ToolCallRequest;
+  options: ToolExecuteOptions;
+  req?: ServerRequest;
+  filePath: string;
+  content: string;
+  overwrite: boolean;
+  codeExecutionContext: CodeExecutionContext;
+  signal?: AbortSignal;
+}): AuthoringResult {
+  if (!options.writeWorkspaceFile) {
+    return errorResult(tc, 'Attached workspace file writing is not configured.');
+  }
+  const path = attachedWorkspaceAuthoringPath(tc, filePath);
+  if ('status' in path) return path;
+  if (new TextEncoder().encode(content).byteLength > WORKSPACE_WRITE_MAX_BYTES) {
+    return errorResult(tc, 'Attached workspace files are limited to 1 MiB per write.');
+  }
+  const filtered = filteredFileResult(tc, req, path.filePath, content);
+  if (filtered != null) return filtered;
+  const workspaceId = selectedWorkspaceId(codeExecutionContext, 'write_file');
+  if (!workspaceId) return unavailableWorkspaceOperation(tc, 'write_file');
+
+  try {
+    const result = await options.writeWorkspaceFile({
+      file_path: path.filePath,
+      content,
+      overwrite,
+      ...attachedWorkspaceMutationParams(codeExecutionContext, workspaceId, req, signal),
+    });
+    const action = result.created ? 'Created' : 'Updated';
+    return successResult(tc, `${action} workspace/${path.filePath} (${content.length} chars).`, {
+      path: `workspace/${path.filePath}`,
+      [HOST_FILE_AUTHORING_ARTIFACT_KEY]: true,
+      bytes_written: result.bytesWritten,
+      created: result.created,
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceToolHttpError) {
+      if (error.upstreamStatus === 409 && !overwrite) {
+        error.message += '. File already exists. Pass overwrite: true to replace.';
+      }
+      throw explainWorkspacePathRejection(error, 'write', `workspace/${path.filePath}`);
+    }
+    if (signal?.aborted === true && isAbortError(error)) throw error;
+    logger.warn('[file_authoring] Attached workspace write failed', getSafeErrorMetadata(error));
+    return errorResult(tc, `Failed to write "workspace/${path.filePath}".`);
+  }
+}
+
+/** One sentence per edit that did not match exactly once, so the model can verify it. */
+function describeAttachedEdit(filePath: string, result: WorkspaceEditResult): string {
+  const count = result.replacements;
+  const notes = (result.matches ?? []).flatMap((match, index) => {
+    const edit = count === 1 ? 'the edit' : `edit ${index + 1}`;
+    const found = match.strategy === 'exact' ? [] : [`${edit} matched with ${match.strategy}`];
+    return match.occurrences > 1
+      ? [...found, `${edit} replaced ${match.occurrences} locations`]
+      : found;
+  });
+  if (notes.length === 0) {
+    return `Updated workspace/${filePath} with ${count} exact replacement${count === 1 ? '' : 's'}.`;
+  }
+  return `Updated workspace/${filePath} with ${count} replacement${count === 1 ? '' : 's'} (${notes.join('; ')}).`;
+}
+
+/**
+ * A rejected attached edit that keeps its status and code but none of its body, so logs never
+ * retain upstream text. `message` is what logs keep; `modelMessage` may add the current file text
+ * a worker quoted, which the model sees just as it would see a read_file result.
+ */
+class AttachedEditRejectionError extends WorkspaceToolHttpError {
+  constructor(
+    reason: WorkspaceToolHttpError['reason'],
+    message: string,
+    public readonly modelMessage: string,
+    code = 'EDIT_CONFLICT',
+  ) {
+    super(reason, 409, JSON.stringify({ code }));
+    this.message = message;
+  }
+}
+
+/**
+ * Any other 409, such as a quarantined workspace, is not a text mismatch the model can fix by
+ * re-reading. Only its validated code is kept, in host words.
+ */
+function attachedEditRejection(
+  filePath: string,
+  error: WorkspaceToolHttpError,
+  code: string,
+): AttachedEditRejectionError {
+  const guidance =
+    code === 'WORKSPACE_QUARANTINED'
+      ? ' The workspace is quarantined after an earlier operation did not finish; it must be reset on its machine before edits can apply, so retrying will not help.'
+      : '';
+  const message = `The edit to "workspace/${filePath}" was rejected by the code environment (${code}), so nothing was written.${guidance}`;
+  return new AttachedEditRejectionError(error.reason, message, message, code);
+}
+
+/**
+ * A worker is outside LibreChat's trust boundary, so its conflict text is never forwarded: only the
+ * facts a strict parse recovers from it (which edits failed, how, and on which lines) reach the
+ * model, in LibreChat's own words. The one exception is a well-formed excerpt of the edited file's
+ * current text, which is file content like any read_file result: it is quoted only when the selected
+ * workspace allows read_file, and only after it passes the same file-content policy. Anything else
+ * gets the generic retry guidance.
+ */
+function attachedEditConflict(
+  tc: ToolCallRequest,
+  req: ServerRequest | undefined,
+  filePath: string,
+  error: WorkspaceToolHttpError,
+  canRead: boolean,
+): AttachedEditRejectionError {
+  const conflict = error.editConflict;
+  const settle = (message: string, modelMessage = message) =>
+    new AttachedEditRejectionError(error.reason, message, modelMessage);
+  if (conflict?.startsWith('Workspace file changed')) {
+    return settle(
+      `"workspace/${filePath}" changed while this edit was being applied, so nothing was written. Re-read the file and retry.`,
+    );
+  }
+  const report = conflict == null ? undefined : parseEditConflict(conflict);
+  if (!report) {
+    return settle(
+      `The edit to "workspace/${filePath}" did not apply, so nothing was written. The requested text did not match exactly once; re-read the file and retry.`,
+    );
+  }
+  const path = `workspace/${filePath}`;
+  const message = formatEditConflict(path, report);
+  const excerpts = editConflictExcerptText(report);
+  if (!canRead || !excerpts || filteredFileResult(tc, req, filePath, excerpts) != null) {
+    return settle(message);
+  }
+  return settle(message, formatEditConflict(path, report, true));
+}
+
+async function handleAttachedWorkspaceEditFileCall({
+  tc,
+  options,
+  req,
+  filePath,
+  edits,
+  codeExecutionContext,
+  signal,
+}: {
+  tc: ToolCallRequest;
+  options: ToolExecuteOptions;
+  req?: ServerRequest;
+  filePath: string;
+  edits: TextEdit[];
+  codeExecutionContext: CodeExecutionContext;
+  signal?: AbortSignal;
+}): AuthoringResult {
+  if (!options.editWorkspaceFile) {
+    return errorResult(tc, 'Attached workspace file editing is not configured.');
+  }
+  const path = attachedWorkspaceAuthoringPath(tc, filePath);
+  if ('status' in path) return path;
+  if (edits.length > WORKSPACE_EDIT_MAX_COUNT) {
+    return errorResult(
+      tc,
+      `Attached workspace edits are limited to ${WORKSPACE_EDIT_MAX_COUNT} replacements per call.`,
+    );
+  }
+  const editBytes = edits.reduce(
+    (bytes, edit) =>
+      bytes +
+      new TextEncoder().encode(edit.old_text).byteLength +
+      new TextEncoder().encode(edit.new_text).byteLength,
+    0,
+  );
+  if (editBytes > WORKSPACE_WRITE_MAX_BYTES) {
+    return errorResult(tc, 'Attached workspace edit text is limited to 1 MiB per call.');
+  }
+  const filteredName = filteredFileNameResult(tc, req, path.filePath);
+  if (filteredName != null) return filteredName;
+  const workspaceId = selectedWorkspaceId(codeExecutionContext, 'edit_file');
+  if (!workspaceId) return unavailableWorkspaceOperation(tc, 'edit_file');
+  const editFeatures = codeExecutionContext.codeWorkspace?.editFileFeatures ?? [];
+  if (edits.some((edit) => edit.replace_all === true) && !editFeatures.includes('replace_all')) {
+    return errorResult(
+      tc,
+      'replace_all needs a newer LibreChat Code worker on this machine. Make each old_text unique instead.',
+    );
+  }
+  /** Tolerant by default, like every other edit_file variant; operators can require exact. */
+  const matching: WorkspaceEditMatching | undefined =
+    codeExecutionContext.codeEnvironmentConfigSchema?.edits?.tolerantMatching !== false &&
+    editFeatures.includes('tolerant_match')
+      ? 'tolerant'
+      : undefined;
+
+  try {
+    const workspaceEdits: WorkspaceTextEdit[] = edits.map((edit) => ({
+      oldText: edit.old_text,
+      newText: edit.new_text,
+      ...(edit.replace_all === true ? { replaceAll: true } : {}),
+    }));
+    const workspaceParams = attachedWorkspaceMutationParams(
+      codeExecutionContext,
+      workspaceId,
+      req,
+      signal,
+    );
+    const queueDeadlineAt = Date.now() + workspaceParams.maxQueueWaitMs;
+    let expectedBaseSha256: string | undefined;
+    if (hasActiveFileFieldPolicy(req?.config?.filters, ['content', 'extracted_text'])) {
+      if (!options.previewWorkspaceEdit) {
+        return errorResult(
+          tc,
+          'Attached workspace editing requires an updated BYOM worker while file-content protections are enabled.',
+        );
+      }
+      if (!selectedWorkspaceId(codeExecutionContext, 'preview_edit')) {
+        return unavailableWorkspaceOperation(tc, 'preview_edit');
+      }
+      let preview: WorkspacePreviewEditResult;
+      try {
+        preview = await options.previewWorkspaceEdit({
+          file_path: path.filePath,
+          edits: workspaceEdits,
+          ...(matching ? { matching } : {}),
+          ...workspaceParams,
+        });
+      } catch (error) {
+        if (signal?.aborted === true && isAbortError(error)) throw error;
+        if (error instanceof WorkspaceToolHttpError && error.upstreamStatus === 400) {
+          error.message +=
+            '. This attached environment must update its LibreChat Code worker before protected files can be edited.';
+        }
+        throw error;
+      }
+      const filteredContent = filteredFileResult(tc, req, path.filePath, preview.content);
+      if (filteredContent != null) return filteredContent;
+      expectedBaseSha256 = preview.baseSha256;
+      /** A spent queue horizon disables capacity retries, not the required
+       * hash-guarded edit attempt or its independent rate-limit recovery. */
+      if (workspaceParams.maxQueueWaitMs > 0) {
+        workspaceParams.maxQueueWaitMs = Math.max(0, queueDeadlineAt - Date.now());
+      }
+    }
+    const result = await options.editWorkspaceFile({
+      file_path: path.filePath,
+      edits: workspaceEdits,
+      ...(expectedBaseSha256 ? { expected_base_sha256: expectedBaseSha256 } : {}),
+      ...(matching ? { matching } : {}),
+      ...workspaceParams,
+    });
+    return successResult(tc, describeAttachedEdit(path.filePath, result), {
+      path: `workspace/${path.filePath}`,
+      [HOST_FILE_AUTHORING_ARTIFACT_KEY]: true,
+      bytes_written: result.bytesWritten,
+      created: false,
+      edits: result.replacements,
+      strategies:
+        result.matches?.map((match) => match.strategy) ??
+        Array.from({ length: result.replacements }, () => 'exact'),
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceToolHttpError) {
+      if (error.upstreamStatus !== 409) {
+        throw explainWorkspacePathRejection(error, 'edit', `workspace/${path.filePath}`);
+      }
+      const code = error.upstreamCode;
+      throw code == null || code === 'EDIT_CONFLICT'
+        ? attachedEditConflict(
+            tc,
+            req,
+            path.filePath,
+            error,
+            selectedWorkspaceId(codeExecutionContext, 'read_file') != null,
+          )
+        : attachedEditRejection(path.filePath, error, code);
+    }
+    if (signal?.aborted === true && isAbortError(error)) throw error;
+    logger.warn('[file_authoring] Attached workspace edit failed', getSafeErrorMetadata(error));
+    return errorResult(tc, `Failed to edit "workspace/${path.filePath}".`);
+  }
 }
 
 async function handleSandboxCreateFileCall({
@@ -3079,6 +4229,7 @@ async function handleSandboxCreateFileCall({
   overwrite,
   sandboxContext,
   codeExecutionContext,
+  signal,
 }: {
   tc: ToolCallRequest;
   options: ToolExecuteOptions;
@@ -3088,7 +4239,20 @@ async function handleSandboxCreateFileCall({
   overwrite: boolean;
   sandboxContext?: SandboxSessionContext;
   codeExecutionContext?: CodeExecutionContext;
+  signal?: AbortSignal;
 }): AuthoringResult {
+  if (codeExecutionContext?.environmentType === 'attached') {
+    return await handleAttachedWorkspaceCreateFileCall({
+      tc,
+      options,
+      req,
+      filePath,
+      content,
+      overwrite,
+      codeExecutionContext,
+      signal,
+    });
+  }
   const pathError = invalidSandboxAuthoringPath(filePath);
   if (pathError) {
     return errorResult(tc, pathError);
@@ -3122,6 +4286,12 @@ async function handleSandboxCreateFileCall({
   });
 }
 
+function hostEditFailure(tc: ToolCallRequest, error: unknown): ToolExecuteResult {
+  if (error instanceof HostEditError) return errorResult(tc, error.message);
+  logger.warn('[file_authoring] Host edit processing failed', getSafeErrorMetadata(error));
+  return errorResult(tc, 'File edit processing failed. Nothing was written.');
+}
+
 async function handleSandboxEditFileCall({
   tc,
   options,
@@ -3130,6 +4300,7 @@ async function handleSandboxEditFileCall({
   edits,
   sandboxContext,
   codeExecutionContext,
+  signal,
 }: {
   tc: ToolCallRequest;
   options: ToolExecuteOptions;
@@ -3138,7 +4309,19 @@ async function handleSandboxEditFileCall({
   edits: TextEdit[];
   sandboxContext?: SandboxSessionContext;
   codeExecutionContext?: CodeExecutionContext;
+  signal?: AbortSignal;
 }): AuthoringResult {
+  if (codeExecutionContext?.environmentType === 'attached') {
+    return await handleAttachedWorkspaceEditFileCall({
+      tc,
+      options,
+      req,
+      filePath,
+      edits,
+      codeExecutionContext,
+      signal,
+    });
+  }
   const pathError = invalidSandboxAuthoringPath(filePath);
   if (pathError) {
     return errorResult(tc, pathError);
@@ -3161,10 +4344,17 @@ async function handleSandboxEditFileCall({
 
   let edited: { content: string; strategies: string[] };
   try {
-    edited = applyTextEdits(current.content, edits);
+    edited = await applyHostTextEdits(
+      current.content,
+      edits,
+      req?.config?.endpoints?.agents?.hostFileEdits,
+      signal,
+    );
   } catch (error) {
-    return errorResult(tc, error instanceof Error ? error.message : 'Failed to edit file');
+    if (signal?.aborted) throw error;
+    return hostEditFailure(tc, error);
   }
+  signal?.throwIfAborted();
   if (Buffer.byteLength(edited.content, 'utf8') > MAX_AUTHORING_BYTES) {
     return errorResult(tc, `edited content exceeds ${MAX_AUTHORING_BYTES} byte limit`);
   }
@@ -3176,6 +4366,7 @@ async function handleSandboxEditFileCall({
     filePath,
     content: edited.content,
     oldContent: current.content,
+    signal,
     created: false,
     sandboxContext,
     codeExecutionContext,
@@ -3198,6 +4389,7 @@ async function handleCreateFileCall(
   req?: ServerRequest,
   sourceConfigurable?: Record<string, unknown>,
   sandboxContext?: SandboxSessionContext,
+  signal?: AbortSignal,
 ): AuthoringResult {
   const args = tc.args as { path?: unknown; content?: unknown; overwrite?: unknown };
   if (typeof args.path !== 'string' || args.path.length === 0) {
@@ -3216,7 +4408,7 @@ async function handleCreateFileCall(
   }
 
   const overwrite = args.overwrite === true;
-  if (!args.path.startsWith(SKILL_FILE_PREFIX)) {
+  if (!isSkillFilePath(args.path)) {
     if (mergedConfigurable?.codeEnvAvailable !== true) {
       return errorResult(
         tc,
@@ -3232,6 +4424,7 @@ async function handleCreateFileCall(
       overwrite,
       sandboxContext,
       codeExecutionContext: getCodeExecutionContext(mergedConfigurable),
+      signal,
     });
   }
 
@@ -3301,6 +4494,7 @@ async function handleCreateFileCall(
     displayPath: parsed.displayPath,
     content: args.content,
     oldContent: current.status === 'present' ? current.oldContent : undefined,
+    fileId: current.status === 'present' ? current.fileId : undefined,
     created: current.status === 'missing',
   });
 }
@@ -3311,11 +4505,13 @@ async function handleEditFileCall(
   options: ToolExecuteOptions,
   req?: ServerRequest,
   sandboxContext?: SandboxSessionContext,
+  signal?: AbortSignal,
 ): AuthoringResult {
   const args = tc.args as {
     path?: unknown;
     old_text?: unknown;
     new_text?: unknown;
+    replace_all?: unknown;
     edits?: unknown;
   };
   if (typeof args.path !== 'string' || args.path.length === 0) {
@@ -3327,7 +4523,7 @@ async function handleEditFileCall(
     return errorResult(tc, edits);
   }
 
-  if (!args.path.startsWith(SKILL_FILE_PREFIX)) {
+  if (!isSkillFilePath(args.path)) {
     if (mergedConfigurable?.codeEnvAvailable !== true) {
       return errorResult(
         tc,
@@ -3342,6 +4538,7 @@ async function handleEditFileCall(
       edits,
       sandboxContext,
       codeExecutionContext: getCodeExecutionContext(mergedConfigurable),
+      signal,
     });
   }
 
@@ -3388,10 +4585,17 @@ async function handleEditFileCall(
 
   let edited: { content: string; strategies: string[] };
   try {
-    edited = applyTextEdits(current.content, edits);
+    edited = await applyHostTextEdits(
+      current.content,
+      edits,
+      req?.config?.endpoints?.agents?.hostFileEdits,
+      signal,
+    );
   } catch (error) {
-    return errorResult(tc, error instanceof Error ? error.message : 'Failed to edit file');
+    if (signal?.aborted) throw error;
+    return hostEditFailure(tc, error);
   }
+  signal?.throwIfAborted();
   if (Buffer.byteLength(edited.content, 'utf8') > MAX_AUTHORING_BYTES) {
     return errorResult(tc, `edited content exceeds ${MAX_AUTHORING_BYTES} byte limit`);
   }
@@ -3405,6 +4609,7 @@ async function handleEditFileCall(
       skill,
       skillName: parsed.skillName,
       content: edited.content,
+      signal,
     });
     if (result.status === 'success') {
       result.artifact = {
@@ -3425,7 +4630,9 @@ async function handleEditFileCall(
     relativePath: parsed.relativePath,
     displayPath: parsed.displayPath,
     content: edited.content,
+    signal,
     oldContent: current.content,
+    fileId: current.fileId,
     created: false,
   });
   if (result.status === 'success') {
@@ -3445,6 +4652,7 @@ async function handleReadFileCall(
   options: ToolExecuteOptions,
   req?: ServerRequest,
   onSandboxReadSuccess?: () => void,
+  signal?: AbortSignal,
 ): Promise<ToolExecuteResult> {
   const { getSkillByName, getSkillFileByPath, getStrategyFunctions, updateSkillFileContent } =
     options;
@@ -3462,6 +4670,25 @@ async function handleReadFileCall(
   const codeExecutionContext = getCodeExecutionContext(mergedConfigurable);
   let accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
 
+  if (args.path.startsWith('workspace/')) {
+    if (!codeEnvAvailable || codeExecutionContext?.environmentType !== 'attached') {
+      return {
+        toolCallId: tc.id,
+        status: 'error',
+        content: '',
+        errorMessage: 'workspace/ paths require an attached code environment.',
+      };
+    }
+    return handleWorkspaceFileRead(
+      tc,
+      args.path.slice('workspace/'.length),
+      options,
+      req,
+      codeExecutionContext,
+      signal,
+    );
+  }
+
   /**
    * Short-circuit absolute code-env paths: the path can never be a skill
    * reference (skill paths are relative `{skillName}/...`), and consulting
@@ -3476,6 +4703,7 @@ async function handleReadFileCall(
         req,
         codeExecutionContext,
         onSandboxReadSuccess,
+        signal,
       );
     }
     return {
@@ -3512,6 +4740,7 @@ async function handleReadFileCall(
           req,
           codeExecutionContext,
           onSandboxReadSuccess,
+          signal,
         );
       }
       return {
@@ -3539,6 +4768,7 @@ async function handleReadFileCall(
           req,
           codeExecutionContext,
           onSandboxReadSuccess,
+          signal,
         );
       }
       return {
@@ -3553,13 +4783,13 @@ async function handleReadFileCall(
   let skillPrimedIdsByName =
     (mergedConfigurable?.skillPrimedIdsByName as Record<string, string> | undefined) ?? {};
   let primedIdString = skillPrimedIdsByName[skillName];
-  let isPrimedThisTurn = primedIdString != null;
+  let isPrimedThisTurn = isSkillPrimedForAuthoring(skillName, mergedConfigurable);
   const refreshSkillReadScope = () => {
     accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
     skillPrimedIdsByName =
       (mergedConfigurable?.skillPrimedIdsByName as Record<string, string> | undefined) ?? {};
     primedIdString = skillPrimedIdsByName[skillName];
-    isPrimedThisTurn = primedIdString != null;
+    isPrimedThisTurn = isSkillPrimedForAuthoring(skillName, mergedConfigurable);
   };
   let recoveredAuthorSkill: AuthoringSkill | null | undefined;
   const recoverAuthorSkill = async () => {
@@ -3608,6 +4838,7 @@ async function handleReadFileCall(
         req,
         codeExecutionContext,
         onSandboxReadSuccess,
+        signal,
       );
     }
     return {
@@ -3654,6 +4885,7 @@ async function handleReadFileCall(
           req,
           codeExecutionContext,
           onSandboxReadSuccess,
+          signal,
         );
       }
       return {
@@ -3684,9 +4916,10 @@ async function handleReadFileCall(
      (rather than relying on mongoose's string auto-cast in `$in` queries)
      keeps the value correct for any future consumer that compares with
      `.equals()` or `===`. */
-  const lookupAccessibleIds = primedIdString ? [new Types.ObjectId(primedIdString)] : accessibleIds;
+  const pinnedIdString = getAuthoredSkillId(skillName, mergedConfigurable) ?? primedIdString;
+  const lookupAccessibleIds = pinnedIdString ? [new Types.ObjectId(pinnedIdString)] : accessibleIds;
   const lookupOptions: { preferUserInvocable?: boolean; preferModelInvocable?: boolean } =
-    primedIdString ? {} : { preferModelInvocable: true };
+    pinnedIdString ? {} : { preferModelInvocable: true };
   let skill = await getSkillByName(skillName, lookupAccessibleIds, lookupOptions);
   if (!skill) {
     skill = await recoverAuthorSkill();
@@ -3742,11 +4975,7 @@ async function handleReadFileCall(
     if (filtered != null) {
       return filtered;
     }
-    return {
-      toolCallId: tc.id,
-      status: 'success',
-      content: `File: ${args.path}\n\n${addLineNumbers(skill.body)}`,
-    };
+    return localTextReadResult(tc, args.path, skill.body, `File: ${args.path}\n\n`);
   }
 
   /* Bundled skill files are primed into the sandbox under the `skills/`
@@ -3808,11 +5037,12 @@ async function handleReadFileCall(
     if (fileFiltered != null) {
       return fileFiltered;
     }
-    return {
-      toolCallId: tc.id,
-      status: 'success',
-      content: `File: ${args.path} (${file.bytes} bytes)\n\n${addLineNumbers(file.content)}`,
-    };
+    return localTextReadResult(
+      tc,
+      args.path,
+      file.content,
+      `File: ${args.path} (${file.bytes} bytes)\n\n`,
+    );
   }
 
   // Early size check from DB metadata before streaming
@@ -3853,7 +5083,7 @@ async function handleReadFileCall(
       };
     }
 
-    const stream = await strategy.getDownloadStream(req, file.filepath);
+    const stream = await strategy.getDownloadStream(req, resolveDownloadPath(file));
     const chunks: Uint8Array[] = [];
     // Use the larger binary limit as streaming cap; cheaper type-specific
     // checks happen after binary detection on the assembled buffer.
@@ -3894,7 +5124,7 @@ async function handleReadFileCall(
     if (isBinary) {
       // Cache the binary flag (first read only)
       if (file.isBinary == null && updateSkillFileContent) {
-        updateSkillFileContent(skill._id, relativePath, { isBinary: true }).catch(
+        updateSkillFileContent(skill._id, relativePath, { isBinary: true }, file.file_id).catch(
           (err: unknown) => {
             logAxiosError({
               message: '[handleReadFileCall] cache write failed',
@@ -3940,14 +5170,17 @@ async function handleReadFileCall(
 
     // Cache text on first read (skill files are immutable)
     if (file.content == null && updateSkillFileContent && buffer.length <= MAX_CACHE_BYTES) {
-      updateSkillFileContent(skill._id, relativePath, { content: text, isBinary: false }).catch(
-        (err: unknown) => {
-          logAxiosError({
-            message: '[handleReadFileCall] cache write failed',
-            error: err,
-          });
-        },
-      );
+      updateSkillFileContent(
+        skill._id,
+        relativePath,
+        { content: text, isBinary: false },
+        file.file_id,
+      ).catch((err: unknown) => {
+        logAxiosError({
+          message: '[handleReadFileCall] cache write failed',
+          error: err,
+        });
+      });
     }
 
     if (buffer.length > MAX_READABLE_BYTES) {
@@ -3958,11 +5191,12 @@ async function handleReadFileCall(
       };
     }
 
-    return {
-      toolCallId: tc.id,
-      status: 'success',
-      content: `File: ${args.path} (${buffer.length} bytes)\n\n${addLineNumbers(text)}`,
-    };
+    return localTextReadResult(
+      tc,
+      args.path,
+      text,
+      `File: ${args.path} (${buffer.length} bytes)\n\n`,
+    );
   } catch (error) {
     return {
       toolCallId: tc.id,
@@ -3979,6 +5213,8 @@ async function handleSkillToolCall(
   options: ToolExecuteOptions,
   agentId?: string,
   req?: ServerRequest,
+  signal?: AbortSignal,
+  rateLimitBudget?: import('~/utils').CodeApiRateLimitBudget,
 ): Promise<ToolExecuteResult> {
   const {
     getSkillByName,
@@ -4009,16 +5245,34 @@ async function handleSkillToolCall(
   }
 
   const accessibleIds = (mergedConfigurable?.accessibleSkillIds as Types.ObjectId[]) ?? [];
-  /* `preferModelInvocable` keeps name-collision resolution aligned with
-     the catalog: a newer `disable-model-invocation: true` duplicate
-     can't shadow the cataloged invocable doc. Model-only
+  /* On a name this run's authoring path bound to a specific doc, pin the
+     accessible set to ONLY that `_id`, exactly as the `read_file` path
+     pins to a primed `_id`. `getSkillByName` resolves deployment skills
+     from the registry before the database and matches on name plus
+     accessibility alone, so a same-name deployment skill sharing the
+     accessible set would otherwise shadow the doc just authored — the
+     model would be told its creation is invocable and then be handed
+     different instructions. Pinning also drops `preferModelInvocable`,
+     matching `resolveSkillForAuthoring`: with one candidate there is no
+     collision to resolve, and the `disable-model-invocation` gate below
+     must still see the authored doc rather than a same-name twin.
+
+     `preferModelInvocable` keeps name-collision resolution aligned with
+     the catalog otherwise: a newer `disable-model-invocation: true`
+     duplicate can't shadow the cataloged invocable doc. Model-only
      (`userInvocable: false`) skills are intentionally still resolvable
      here — they're valid model-invocation targets. Falls back to the
      newest match so the disabled-only case still resolves and the gate
      below fires its explicit error. */
-  const skill = await getSkillByName(args.skillName, accessibleIds, {
-    preferModelInvocable: true,
-  });
+  const authoredIdString = getAuthoredSkillId(args.skillName, mergedConfigurable);
+  const lookupAccessibleIds = authoredIdString
+    ? [new Types.ObjectId(authoredIdString)]
+    : accessibleIds;
+  const skill = await getSkillByName(
+    args.skillName,
+    lookupAccessibleIds,
+    authoredIdString ? {} : { preferModelInvocable: true },
+  );
 
   if (!skill) {
     return {
@@ -4094,7 +5348,9 @@ async function handleSkillToolCall(
   ) {
     let primeResult: PrimeSkillFilesResult | null = null;
     try {
+      signal?.throwIfAborted();
       const skillFiles = await listSkillFiles(skill._id);
+      signal?.throwIfAborted();
       primeResult = await primeSkillFiles({
         skill,
         skillFiles,
@@ -4105,6 +5361,8 @@ async function handleSkillToolCall(
         checkIfActive,
         updateSkillFileCodeEnvIds,
         codeExecutionContext,
+        signal,
+        rateLimitBudget,
       });
       if (primeResult) {
         /* `session_id` at the top of the artifact is the (representative)
@@ -4129,6 +5387,9 @@ async function handleSkillToolCall(
         };
       }
     } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
       if (isContentFilterError(error)) {
         return error instanceof ContentFilterError
           ? errorResult(tc, modelBoundContentFilterErrorMessage(error.body))
@@ -4203,7 +5464,7 @@ function getFileAuthoringQueueKey(
  * failed background run renders as clean stdout.
  */
 function toBackgroundToolFailure(toolName: string, message: string): string {
-  if (/^Error:\s*(\[.*?\]\s*)*tool call failed:/i.test(message)) {
+  if (hasToolCallErrorPrefix(message)) {
     return message;
   }
   return `Error: [${toolName}] tool call failed: ${message}`;
@@ -4309,21 +5570,173 @@ function buildToolCallConfig(
   return toolCallConfig;
 }
 
-export function createToolExecuteHandler(options: ToolExecuteOptions): EventHandler {
+/**
+ * One-shot handoff of the files a `skill` call uploads to the code calls that
+ * share its batch.
+ *
+ * The graph hands every call in a batch the code-session snapshot it took when
+ * it planned the batch, and folds a `skill` call's artifact back into the
+ * session only after the whole batch settles. A code call dispatched beside a
+ * `skill` call therefore reads a context with none of the skill's bundled
+ * files: `_injected_files` omits them and the sandbox has no
+ * `/mnt/data/skills/<name>/` for that batch. Waiting here, then merging the
+ * uploaded refs into the code call's own context, is what makes the files
+ * visible on the turn that loaded them.
+ */
+interface SkillFilesHandoff {
+  /** Records a settled `skill` call; the last one releases every waiter. */
+  record(result: ToolExecuteResult): void;
+  /** Resolves once every `skill` call in the batch has settled, then merges
+   *  their uploaded files into this call's own code-session context. Never
+   *  rejects: a skill whose files failed to load contributes nothing and the
+   *  waiting call runs with the context it already had. */
+  applyTo(tc: ToolCallRequest): Promise<void>;
+}
+
+function createSkillFilesHandoff(
+  skillToolCallIds: ReadonlySet<string>,
+  signal?: AbortSignal,
+): SkillFilesHandoff {
+  const pendingSkillCallIds = new Set(skillToolCallIds);
+  const uploadedFiles: CodeEnvFile[] = [];
+  let release!: () => void;
+  const settled = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  /** A Stop ends the turn for every call in the batch, so waiters are released
+   *  the moment it lands instead of riding out the upload's own cancellation. */
+  const onAbort = (): void => release();
+  if (signal?.aborted === true) {
+    release();
+  } else {
+    signal?.addEventListener('abort', onAbort, { once: true });
+  }
+  return {
+    record(result: ToolExecuteResult): void {
+      if (!pendingSkillCallIds.delete(result.toolCallId)) {
+        return;
+      }
+      const files =
+        result.status === 'success'
+          ? (result.artifact as { files?: CodeEnvFile[] } | undefined)?.files
+          : undefined;
+      if (files && files.length > 0) {
+        uploadedFiles.push(...files);
+      }
+      if (pendingSkillCallIds.size === 0) {
+        signal?.removeEventListener('abort', onAbort);
+        release();
+      }
+    },
+    async applyTo(tc: ToolCallRequest): Promise<void> {
+      await settled;
+      /* Same call shape as the provisioned-attachment fold in the executor, so
+       * identity (`storage_session_id` + `id`) and destination rules stay
+       * consistent. Returns undefined when no skill contributed a file. */
+      const merged = mergeCodeFilesIntoContext(
+        tc.codeSessionContext as CodeSessionContext | undefined,
+        uploadedFiles,
+      );
+      if (merged) {
+        tc.codeSessionContext = merged;
+      }
+    },
+  };
+}
+
+function getToolFailureFeedback(content: ToolExecuteResult['content']): string {
+  if (typeof content === 'string') return content;
+  const messages: string[] = [];
+  for (const part of content) {
+    if (
+      part != null &&
+      typeof part === 'object' &&
+      'type' in part &&
+      part.type === 'text' &&
+      'text' in part &&
+      typeof part.text === 'string'
+    )
+      messages.push(part.text);
+  }
+  return messages.join('\n') || 'Tool execution failed.';
+}
+
+export function createToolExecuteHandler(handlerOptions: ToolExecuteOptions): EventHandler {
+  const authoredSkills = new AuthoredSkillState();
+  const resumedSkillConfigurables = new Map<string, Record<string, unknown>>();
   const {
+    scheduledMCPExecution,
+    runSignal: hostRunSignal,
+    foregroundRunId,
     loadTools,
     toolEndCallback,
+    attachedCommandStepIds,
     eventActorDetachedAction,
     persistBackgroundCodeResult,
     backgroundToolCompletion,
     emitAttachment,
     emitPtcProgress,
     subagentTasks,
-  } = options;
+    runFiles,
+    ordinaryToolCancellation = false,
+    backgroundCompletionResultMaxChars = AGENT_BACKGROUND_COMPLETION_RESULT_MAX_CHARS_DEFAULT,
+    provisionFiles,
+  } = handlerOptions;
 
-  return {
+  const handler: EventHandler = {
     handle: async (_event: string, data: ToolExecuteBatchRequest) => {
-      const { toolCalls, agentId, configurable, metadata, resolve, reject } = data;
+      const {
+        toolCalls,
+        agentId,
+        configurable: incomingConfigurable,
+        metadata: incomingMetadata,
+        signal: eventRunSignal,
+        resolve,
+        reject,
+      } = data;
+      const onResultAdmissionStart = (data as InterruptibleToolBatchRequest).onResultAdmissionStart;
+      const executionContext = (
+        data as ToolExecuteBatchRequest & { executionContext?: SubagentExecutionContext }
+      ).executionContext;
+      const authoredScope = authoredSkills.scope(agentId, executionContext);
+      const options: ToolExecuteOptions = {
+        ...handlerOptions,
+        onSkillAuthored: (binding) => authoredSkills.record(authoredScope, binding),
+      };
+      // Only the SDK-owned batch field may establish a child execution. Runtime
+      // configurable and callback metadata can otherwise carry inherited values.
+      /**
+       * Authored-skill identity has to outlive the per-batch copy below, which
+       * is what makes a skill created in one batch resolvable in the next.
+       * A shallow copy shares object references, so seeding the map on the
+       * run's own configurable lets `rememberAuthoredSkill` mutate it in place
+       * and later batches observe it, exactly as the shared
+       * `accessibleSkillIds` array already crosses batches. A fresh map
+       * assigned onto the copy would be discarded with the copy.
+       */
+      if (incomingConfigurable != null && incomingConfigurable.authoredSkillIdsByName == null) {
+        incomingConfigurable.authoredSkillIdsByName = {};
+      }
+      const configurable: Record<string, unknown> | undefined =
+        incomingConfigurable == null ? undefined : { ...incomingConfigurable, executionContext };
+      const metadata: Record<string, unknown> | undefined =
+        incomingMetadata == null && executionContext == null
+          ? undefined
+          : { ...incomingMetadata, executionContext };
+      let eventRunId: string | undefined;
+      if (typeof metadata?.run_id === 'string') {
+        eventRunId = metadata.run_id;
+      } else if (typeof configurable?.run_id === 'string') {
+        eventRunId = configurable.run_id;
+      }
+      const foregroundHostSignal =
+        eventRunId == null || eventRunId === foregroundRunId ? hostRunSignal : undefined;
+      const runSignal =
+        foregroundHostSignal != null &&
+        eventRunSignal != null &&
+        foregroundHostSignal !== eventRunSignal
+          ? AbortSignal.any([foregroundHostSignal, eventRunSignal])
+          : (foregroundHostSignal ?? eventRunSignal);
       const callerCapabilityProjection = resolveCallerCapabilityProjectionSnapshot(
         (
           data as ToolExecuteBatchRequest & {
@@ -4338,10 +5751,18 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
           onResult?: (result: ToolExecuteResult) => void;
         }
       ).onResult;
+      /** Set only for a batch that mixes `skill` calls with code calls (see
+       * {@link createSkillFilesHandoff}); `undefined` leaves every other batch
+       * fully concurrent. */
+      let skillFilesHandoff: SkillFilesHandoff | undefined;
       /** Reports a settled result so the agent graph can emit that call's
        * completion immediately instead of waiting for the whole batch;
        * `resolve` below remains the authoritative batch outcome. */
       const reportResult = (result: ToolExecuteResult): ToolExecuteResult => {
+        /* Every per-call return in the batch funnels through here, so this is
+         * the one place that observes a `skill` call settling whatever path
+         * produced its result, including the filtered and error paths. */
+        skillFilesHandoff?.record(result);
         try {
           onResult?.(result);
         } catch (callbackError) {
@@ -4377,20 +5798,154 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
               return;
             }
             const toolNames = [...new Set(allowedToolCalls.map((tc) => tc.name))];
+
+            const runFileSharingActive = runFiles?.isActive() === true;
+            if (runFileSharingActive) {
+              if (!agentId) throw new Error('Shared-file tools require an executing agent.');
+              await runFiles!.prepareTools(
+                agentId,
+                executionContext,
+                runSignal ?? new AbortController().signal,
+                toolNames.some(isFileResourceToolName) ? 'refresh' : 'snapshot',
+              );
+            }
+            const provisionedCodeFiles = provisionFiles
+              ? await provisionFiles(toolNames, agentId, runSignal, executionContext)
+              : undefined;
+
             const { loadedTools, configurable: toolConfigurable } = await loadTools(
               toolNames,
               agentId,
               sourceConfigurable,
               callerCapabilityProjection,
+              runSignal,
+              executionContext,
             );
             const toolMap = new Map(loadedTools.map((t) => [t.name, t]));
             const loadedConfigurable = toolConfigurable as Record<string, unknown> | undefined;
-            const mergedConfigurable = mergeToolConfigurables(
-              sourceConfigurable,
-              loadedConfigurable,
+            const authoredScopeKey = JSON.stringify(authoredScope);
+            let resumedSkillConfigurable = resumedSkillConfigurables.get(authoredScopeKey);
+            const baseConfigurable = mergeToolConfigurables(sourceConfigurable, loadedConfigurable);
+            // Restored identity wins; current capability and request fields still come from loadTools.
+            const mergedConfigurable = resumedSkillConfigurable
+              ? mergeToolConfigurables(resumedSkillConfigurable, baseConfigurable)
+              : baseConfigurable;
+            if (authoredSkills.hasPending) {
+              const requestedSkills = new Map<string, ToolCallRequest[]>();
+              for (const tc of allowedToolCalls) {
+                const args = tc.args as { path?: unknown; skillName?: unknown };
+                let skillName: string | undefined;
+                if (tc.name === Constants.SKILL_TOOL && typeof args.skillName === 'string') {
+                  skillName = args.skillName;
+                } else if (
+                  typeof args.path === 'string' &&
+                  (args.path.startsWith(SKILL_FILE_PREFIX) ||
+                    (tc.name === Constants.READ_FILE && !args.path.startsWith('workspace/'))) &&
+                  (tc.name === Constants.READ_FILE ||
+                    isHostFileAuthoringToolCall(tc.name, mergedConfigurable))
+                ) {
+                  const path = args.path.startsWith(SKILL_FILE_PREFIX)
+                    ? args.path.slice(SKILL_FILE_PREFIX.length)
+                    : args.path;
+                  skillName = path.split('/')[0];
+                }
+                if (skillName)
+                  requestedSkills.set(skillName, [...(requestedSkills.get(skillName) ?? []), tc]);
+              }
+              const restored = authoredSkills.take(authoredScope, new Set(requestedSkills.keys()));
+              if (restored.length > 0) {
+                const req = mergedConfigurable.req as ServerRequest | undefined;
+                await Promise.all(
+                  restored.map(async (binding) => {
+                    const skill =
+                      isSkillAuthoringAvailable(mergedConfigurable) &&
+                      req &&
+                      options.getAuthorSkillByName
+                        ? await options.getAuthorSkillByName({ req, name: binding.name })
+                        : null;
+                    const allowed =
+                      skill &&
+                      skill._id.toString() === binding.id &&
+                      req &&
+                      options.canEditSkill &&
+                      (await options.canEditSkill({ req, skillId: skill._id }));
+                    if (!allowed || !skill) {
+                      for (const tc of requestedSkills.get(binding.name) ?? []) {
+                        preloadedNameBlocks.set(
+                          tc,
+                          errorResult(tc, `Skill "${binding.name}" not found or not accessible.`),
+                        );
+                      }
+                      return;
+                    }
+                    if (!resumedSkillConfigurable) {
+                      resumedSkillConfigurable = {};
+                      resumedSkillConfigurables.set(authoredScopeKey, resumedSkillConfigurable);
+                    }
+                    rememberAuthoredSkill([mergedConfigurable, resumedSkillConfigurable], skill, {
+                      prime: binding.primed,
+                    });
+                    authoredSkills.confirm(authoredScope, binding.name);
+                  }),
+                );
+              }
+            }
+            if (mergedConfigurable != null) mergedConfigurable.executionContext = executionContext;
+            /* The graph populated each call's code-session context from the sessions that
+             * existed at run start, before this batch provisioned anything, and nothing
+             * downstream refreshes it. buildToolCallConfig reads `_injected_files` from
+             * that context alone, so without this fold a successful upload still reaches
+             * a sandbox that cannot see the file. */
+            if (provisionedCodeFiles && provisionedCodeFiles.length > 0) {
+              for (const tc of allowedToolCalls) {
+                if (
+                  !isCodeSessionAwareToolCall(tc.name, mergedConfigurable) &&
+                  !(runFileSharingActive && isCodeFileToolName(tc.name))
+                ) {
+                  continue;
+                }
+                const merged = mergeCodeFilesIntoContext(
+                  tc.codeSessionContext as CodeSessionContext | undefined,
+                  provisionedCodeFiles,
+                );
+                if (merged) {
+                  tc.codeSessionContext = merged;
+                }
+              }
+            }
+
+            /* A code call in this batch reads its code-session context when it
+             * executes, while the `skill` call beside it is still uploading the
+             * files that belong in that context. Only a batch carrying both
+             * kinds of call waits; every other batch stays fully concurrent. */
+            const waitsForSkillFiles = (tc: ToolCallRequest): boolean =>
+              tc.name !== Constants.SKILL_TOOL &&
+              (isCodeSessionAwareToolCall(tc.name, mergedConfigurable) ||
+                (runFileSharingActive && isCodeFileToolName(tc.name)));
+            const skillToolCallIds = new Set(
+              allowedToolCalls.filter((tc) => tc.name === Constants.SKILL_TOOL).map((tc) => tc.id),
             );
+            if (skillToolCallIds.size > 0 && allowedToolCalls.some(waitsForSkillFiles)) {
+              skillFilesHandoff = createSkillFilesHandoff(skillToolCallIds, runSignal);
+            }
+
             const codeExecutionContext = getCodeExecutionContext(mergedConfigurable);
             const runtimeSessionHint = codeExecutionContext?.runtimeSessionHint;
+            if (runFileSharingActive && executionContext != null) {
+              for (const tc of allowedToolCalls) {
+                if (
+                  !isCodeSessionAwareToolCall(tc.name, mergedConfigurable) &&
+                  !isCodeFileToolName(tc.name)
+                )
+                  continue;
+                if (!runtimeSessionHint || codeExecutionContext?.environmentType === 'attached') {
+                  throw new Error('This child execution has no isolated file workspace.');
+                }
+                // SDK tool configs may still carry a parent's runtime hint. The
+                // host prepared this partition using the authorized child identity.
+                tc.runtimeSessionHint = runtimeSessionHint;
+              }
+            }
             const executionRouteKey =
               codeExecutionContext?.executionRouteKey ?? codeExecutionContext?.executionProfile;
             const sandboxConversationId =
@@ -4407,6 +5962,12 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
               }
               if (sandboxConversationId) {
                 void markSandboxReady(sandboxConversationId);
+              }
+            };
+            /** Provenance is the resolved tool instance, never the output. */
+            const recordAttachedCommand = (tc: ToolCallRequest, tool: unknown): void => {
+              if (tc.stepId && isAttachedWorkspaceBashTool(tool)) {
+                attachedCommandStepIds?.add(tc.stepId);
               }
             };
             const authoringQueues = new Map<string, Promise<void>>();
@@ -4472,6 +6033,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                   }) ?? missingToolResult
                 );
               }
+              recordAttachedCommand(tc, tool);
               const isCodeCall = isCodeSessionAwareToolCall(tc.name, mergedConfigurable);
               const harvestEnabled = isCodeCall && persistBackgroundCodeResult != null;
               const liveArtifactPollRequired =
@@ -4509,7 +6071,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                 return {
                   toolCallId: tc.id,
                   status: 'success' as const,
-                  content: buildBackgroundCapacityContent(tc.name),
+                  content: buildBackgroundCapacityContent(tc.name, capacityAdmission.scope),
                 };
               }
               const capacityPermit =
@@ -4576,12 +6138,24 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                   }),
                 };
               }
+              const backgroundAbortController = new AbortController();
+              let backgroundAbortSource: 'manual' | 'timeout' | 'shutdown' | undefined;
               const created = backgroundTaskRegistry.create({
                 ...(detachedReservation?.status === 'reserved'
                   ? { taskId: detachedReservation.taskId }
                   : {}),
                 ...registration,
                 ...(capacityPermit == null ? {} : { capacityPermit }),
+                requestCancellation: () => {
+                  if (backgroundAbortSource != null || backgroundAbortController.signal.aborted) {
+                    return false;
+                  }
+                  backgroundAbortSource = 'manual';
+                  backgroundAbortController.abort(
+                    new DOMException('Background task cancellation requested', 'AbortError'),
+                  );
+                  return true;
+                },
               });
               if ('atCapacity' in created) {
                 if (detachedReservation?.status === 'reserved') {
@@ -4590,7 +6164,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                 return {
                   toolCallId: tc.id,
                   status: 'success' as const,
-                  content: buildBackgroundCapacityContent(tc.name),
+                  content: buildBackgroundCapacityContent(tc.name, created.scope),
                 };
               }
               const { task, isNew } = created;
@@ -4606,6 +6180,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                 ) {
                   try {
                     const admission = await backgroundToolCompletion.preregister({
+                      scheduleMCPIdentity: scheduledMCPExecution?.identity ?? null,
                       taskId: task.id,
                       toolCallId: tc.id,
                       toolName: tc.name,
@@ -4636,6 +6211,63 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     );
                   }
                 }
+                let durableReceiptWrite: Promise<boolean> | undefined;
+                let durableReceiptAmbiguous = false;
+                let durableResultConfirmed = false;
+                let forcedShutdownResult = false;
+                let resolveDurableReceipt: () => void = () => undefined;
+                const durableReceiptSettled = new Promise<void>((resolve) => {
+                  resolveDurableReceipt = resolve;
+                });
+                const confirmDurableResult = (): void => {
+                  durableResultConfirmed = true;
+                  resolveDurableReceipt();
+                };
+                /** One durable receipt per task. The task's own settlement and a
+                 *  shutdown flush share the first write, so neither can retire or
+                 *  contradict a receipt the other already stored. */
+                const writeDurableReceipt = (receipt: {
+                  status: 'completed' | 'error' | 'cancelled';
+                  output?: string;
+                  settledAt: Date;
+                }): Promise<boolean> => {
+                  if (durableReceiptWrite != null) {
+                    return durableReceiptWrite;
+                  }
+                  durableReceiptWrite = (async (): Promise<boolean> => {
+                    if (completionAdmission?.persistResult == null) {
+                      return false;
+                    }
+                    try {
+                      return await completionAdmission.persistResult({
+                        status: receipt.status,
+                        output: truncateMiddle(
+                          receipt.output ?? '',
+                          backgroundCompletionResultMaxChars,
+                        ),
+                        settledAt: receipt.settledAt,
+                      });
+                    } catch (receiptError) {
+                      durableReceiptAmbiguous = true;
+                      logger.warn(
+                        `[background] Failed to persist independent result receipt for task ${task.id}:`,
+                        receiptError,
+                      );
+                      return false;
+                    }
+                  })();
+                  void durableReceiptWrite.then((written) => {
+                    if (written) {
+                      confirmDurableResult();
+                    }
+                  });
+                  return durableReceiptWrite;
+                };
+                /** The task's own terminal result, recorded before its (possibly slow)
+                 *  persistence starts, so a shutdown flush can store it durably. */
+                let settledReceipt:
+                  | { status: 'completed' | 'error' | 'cancelled'; output?: string }
+                  | undefined;
                 /** Persists the settled result onto the dispatch turn's message
                  *  (patch the tool-call part's output, persist generated files,
                  *  append attachments), so a backgrounded code call reads like a
@@ -4647,7 +6279,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                 const persistBackgroundResult = async (params: {
                   output?: string;
                   artifact?: unknown;
-                  status: 'completed' | 'error';
+                  status: 'completed' | 'error' | 'cancelled';
                 }): Promise<void> => {
                   /** A provider id alone is not a durable part identity: it may
                    * repeat in later turns of the same response. New automatic
@@ -4670,15 +6302,25 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     return {
                       taskId: task.id,
                       toolName: tc.name,
-                      status: params.status,
+                      status: params.status === 'cancelled' ? 'error' : params.status,
+                      ...(params.status === 'cancelled' ? { cancelled: true } : {}),
                       settledAt: new Date(current?.updatedAt ?? Date.now()),
                       ...(completionPreregistered ? { completionWakeup: true } : {}),
+                      ...(completionAdmission?.persistResult != null
+                        ? { completionReceipt: true }
+                        : {}),
                       ...(current?.resultClaim != null
                         ? {
                             resultClaim: {
                               kind: current.resultClaim.kind,
                               claimId: current.resultClaim.claimId,
                               claimedAt: new Date(current.resultClaim.claimedAt),
+                              ...(current.resultClaim.receiptReconciled === true && {
+                                receiptReconciled: true,
+                              }),
+                              ...(current.resultClaim.generationId == null
+                                ? {}
+                                : { generationId: current.resultClaim.generationId }),
                             },
                           }
                         : {}),
@@ -4690,10 +6332,21 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     task.id,
                   );
                   const backgroundTask = resolveBackgroundTask();
+                  let durableReceiptReady = false;
+                  const persistDurableReceipt = (receipt: {
+                    status: 'completed' | 'error' | 'cancelled';
+                    output?: string;
+                  }): Promise<boolean> =>
+                    writeDurableReceipt({ ...receipt, settledAt: backgroundTask.settledAt });
                   const retireFailedPersistence = async (
                     reason: string,
                     certainty: 'definite' | 'ambiguous',
                   ): Promise<void> => {
+                    /** Never retire a delivery that already holds a durable receipt,
+                     *  including one a shutdown flush stored ahead of this path. */
+                    if (durableReceiptAmbiguous || (await durableReceiptWrite) === true) {
+                      return;
+                    }
                     if (completionAdmission == null) {
                       backgroundTaskRegistry.markCompletionPersistenceFailed(
                         backgroundUserId,
@@ -4713,6 +6366,23 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                         certainty === 'ambiguous' ? { onlyIfUnclaimed: true } : undefined,
                       );
                       if (!retired) {
+                        const current = backgroundTaskRegistry.get(
+                          backgroundUserId,
+                          backgroundConversationId,
+                          task.id,
+                        );
+                        /** A prior manual poll may already have durably retired
+                         * this exact unclaimed delivery. In that case there is
+                         * no automatic consumer left to race the process-local
+                         * fallback, even though a second retirement is a no-op. */
+                        if (current?.completionWakeupRetired === true) {
+                          backgroundTaskRegistry.markCompletionPersistenceFailed(
+                            backgroundUserId,
+                            backgroundConversationId,
+                            task.id,
+                          );
+                          return;
+                        }
                         logger.warn(
                           `[background] Could not retire failed completion delivery for task ${task.id}.`,
                         );
@@ -4731,6 +6401,10 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     }
                   };
                   if (!harvestEnabled || !persistBackgroundCodeResult) {
+                    durableReceiptReady = await persistDurableReceipt({
+                      status: params.status,
+                      output: params.output ?? localTask?.result,
+                    });
                     if (
                       backgroundToolCompletion == null ||
                       detachedReservation?.status === 'reserved'
@@ -4749,17 +6423,22 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                         backgroundTask,
                         resolveBackgroundTask,
                       });
-                      if (!deliveryReady) {
+                      if (!deliveryReady && !durableReceiptReady) {
                         await retireFailedPersistence(
                           'background tool result was not persisted',
                           'definite',
                         );
+                      } else if (deliveryReady && !durableReceiptReady) {
+                        confirmDurableResult();
+                        completionAdmission?.expedite?.();
                       }
                     } catch (persistError) {
-                      await retireFailedPersistence(
-                        'background tool result persistence failed',
-                        isContentFilterError(persistError) ? 'definite' : 'ambiguous',
-                      );
+                      if (!durableReceiptReady) {
+                        await retireFailedPersistence(
+                          'background tool result persistence failed',
+                          isContentFilterError(persistError) ? 'definite' : 'ambiguous',
+                        );
+                      }
                       logger.warn(
                         `[background] Failed to persist result for task ${task.id}:`,
                         persistError,
@@ -4783,11 +6462,19 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                        *  overwrite it. */
                       dispatchedAt: task.createdAt,
                       codeExecutionContext,
-                      ...(detachedReservation?.status === 'reserved' || !completionPreregistered
+                      ...(detachedReservation?.status === 'reserved' ||
+                      (!completionPreregistered && params.status !== 'cancelled')
                         ? {}
                         : { backgroundTask, resolveBackgroundTask }),
                       output: params.output ?? localTask?.result,
                       artifact: params.artifact,
+                      onFilesPersisted: (attachments) =>
+                        backgroundTaskRegistry.finishHarvest(
+                          backgroundUserId,
+                          backgroundConversationId,
+                          task.id,
+                          attachments,
+                        ),
                     });
                     if (persisted == null) {
                       /** Harvest never persisted anything (missing anchor
@@ -4800,13 +6487,22 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                         task.id,
                         params.artifact,
                       );
-                      if (completionPreregistered) {
+                      if (completionPreregistered && !durableReceiptReady) {
                         await retireFailedPersistence(
                           'background code result had no durable message anchor',
                           'definite',
                         );
                       }
                       return;
+                    }
+                    if (persisted.deliveryReady !== false) {
+                      durableReceiptReady = await persistDurableReceipt({
+                        status: params.status,
+                        output: params.output ?? localTask?.result,
+                      });
+                    }
+                    if (persisted.deliveryReady !== false) {
+                      confirmDurableResult();
                     }
                     if (persisted.deliveryReady === false) {
                       await retireFailedPersistence(
@@ -4821,25 +6517,37 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       persisted.attachments,
                     );
                   } catch (persistError) {
-                    if (completionPreregistered) {
-                      await retireFailedPersistence(
-                        'background code result persistence failed',
-                        isContentFilterError(persistError) ? 'definite' : 'ambiguous',
-                      );
-                    }
                     if (isContentFilterError(persistError)) {
+                      const blockedMessage =
+                        persistError instanceof ContentFilterError
+                          ? modelBoundContentFilterErrorMessage(persistError.body)
+                          : persistError.body.message;
                       backgroundTaskRegistry.blockArtifact(
                         backgroundUserId,
                         backgroundConversationId,
                         task.id,
-                        persistError instanceof ContentFilterError
-                          ? modelBoundContentFilterErrorMessage(persistError.body)
-                          : persistError.body.message,
+                        blockedMessage,
                       );
+                      durableReceiptReady = await persistDurableReceipt({
+                        status: 'error',
+                        output: blockedMessage,
+                      });
+                      if (completionPreregistered && !durableReceiptReady) {
+                        await retireFailedPersistence(
+                          'background code result was blocked by content policy',
+                          'definite',
+                        );
+                      }
                       logger.warn(
                         `[background] Generated code output for task ${task.id} was blocked by content policy.`,
                       );
                       return;
+                    }
+                    if (completionPreregistered && !durableReceiptReady) {
+                      await retireFailedPersistence(
+                        'background code result persistence failed',
+                        'ambiguous',
+                      );
                     }
                     logger.warn(
                       `[background] Failed to persist code result for task ${task.id}:`,
@@ -4853,8 +6561,43 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     );
                   }
                 };
+                const persistSettledBackgroundResult = async (
+                  params: {
+                    output?: string;
+                    artifact?: unknown;
+                    status: 'completed' | 'error' | 'cancelled';
+                  },
+                  forced = false,
+                ): Promise<void> => {
+                  if (forcedShutdownResult && !forced) {
+                    return;
+                  }
+                  settledReceipt = { status: params.status, output: params.output };
+                  /** Held for the whole persist, including a code harvest that waits for
+                   *  a long dispatch turn, so retention pressure cannot evict the task. */
+                  backgroundTaskRegistry.markCompletionPersistencePending(
+                    backgroundUserId,
+                    backgroundConversationId,
+                    task.id,
+                  );
+                  try {
+                    await persistBackgroundResult(params);
+                  } finally {
+                    backgroundTaskRegistry.markCompletionPersistenceFinished(
+                      backgroundUserId,
+                      backgroundConversationId,
+                      task.id,
+                    );
+                  }
+                };
+                const approvalDispatch = {
+                  agentId,
+                  toolCallId: tc.id,
+                  executionScope: getToolApprovalExecutionScope(executionContext),
+                  background: true,
+                };
+                noteToolApprovalDispatch(approvalDispatch);
                 let invokePromise: Promise<{ content?: unknown; artifact?: unknown }>;
-                const backgroundAbortController = new AbortController();
                 try {
                   invokePromise = Promise.resolve(
                     tool.invoke(normalizedArgs, {
@@ -4866,6 +6609,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       signal: backgroundAbortController.signal,
                       configurable: {
                         ...mergedConfigurable,
+                        [BACKGROUND_TOOL_INVOCATION_CONFIG_KEY]: true,
                         ...(detachedReservation?.status === 'reserved'
                           ? {
                               eventActorDetachedAction: {
@@ -4875,7 +6619,10 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                             }
                           : {}),
                       },
-                      metadata,
+                      metadata: bindToolApprovalInvocation(
+                        { ...metadata, executingAgentId: agentId },
+                        approvalDispatch,
+                      ),
                     } as Record<string, unknown>),
                   ) as Promise<{ content?: unknown; artifact?: unknown }>;
                 } catch (error) {
@@ -4884,6 +6631,9 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                    * through the same terminal-evidence path as an async one. */
                   invokePromise = Promise.reject(error);
                 }
+                invokePromise = invokePromise.finally(() =>
+                  finishToolApprovalDispatch(approvalDispatch),
+                );
                 const persistDetachedTerminal = async (
                   input:
                     | { status: 'succeeded'; result: unknown }
@@ -4937,6 +6687,10 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                           .renew()
                           .then((renewed) => {
                             if (!renewed) {
+                              producerHeartbeatStopped = true;
+                              if (producerHeartbeat != null) {
+                                clearInterval(producerHeartbeat);
+                              }
                               logger.warn(
                                 `[background] Completion producer lease was not renewed for task ${task.id}.`,
                               );
@@ -4982,6 +6736,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                 };
                 let producerRetirementTimeout: ReturnType<typeof setTimeout> | undefined;
                 const requestBackgroundAbort = (): void => {
+                  backgroundAbortSource ??= 'timeout';
                   backgroundAbortController.abort(
                     new DOMException('Background task timed out', 'AbortError'),
                   );
@@ -4993,7 +6748,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                   }, BACKGROUND_TASK_ABORT_GRACE_MS);
                   producerRetirementTimeout.unref?.();
                 };
-                void (async () => {
+                const settlement = (async () => {
                   try {
                     const result = await withBackgroundTaskTimeout(
                       invokePromise,
@@ -5030,7 +6785,10 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                         registryError,
                         { harvestStarted: harvestEnabled },
                       );
-                      await persistBackgroundResult({ output: errorOutput, status: 'error' });
+                      await persistSettledBackgroundResult({
+                        output: errorOutput,
+                        status: 'error',
+                      });
                       await wakeDetachedActor();
                       return;
                     }
@@ -5087,7 +6845,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       task.id,
                       { content, artifact: result.artifact, harvestStarted: harvestEnabled },
                     );
-                    await persistBackgroundResult({
+                    await persistSettledBackgroundResult({
                       /** Use the registry's canonical bounded serialization so
                        * structured content cannot leave the durable card on its
                        * synthetic running handle. */
@@ -5101,23 +6859,49 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       toolError instanceof ContentFilterError
                         ? modelBoundContentFilterErrorMessage(toolError.body)
                         : null;
-                    const { message } = getSafeToolError(toolError);
-                    const errorOutput = policyError ?? message;
+                    const { message, logContext } = getSafeToolError(
+                      toolError,
+                      toolValidationFeedback(
+                        toolError,
+                        tc.name,
+                        tool.schema,
+                        normalizedArgs,
+                        backgroundControlEnabled,
+                      ),
+                    );
+                    /** Tools report an abort in their own words; a shutdown interrupt
+                     *  tells the agent why it happened and that it may retry. */
+                    const errorOutput =
+                      backgroundAbortSource === 'shutdown'
+                        ? BACKGROUND_TASK_SHUTDOWN_MESSAGE
+                        : (policyError ?? message);
                     const filteredError =
                       policyError == null
                         ? filteredToolOutputResult(tc, backgroundReq, {
                             errorMessage: errorOutput,
+                            upstreamBody:
+                              toolError instanceof WorkspaceToolHttpError
+                                ? toolError.upstreamBody
+                                : undefined,
                           })
                         : null;
                     const neutralizedError = filteredError?.errorMessage ?? errorOutput;
+                    if (policyError == null && filteredError == null) {
+                      logger.debug('[background] Tool failed', {
+                        ...logContext,
+                        toolName: tc.name,
+                        toolCallId: tc.id,
+                        backgroundTaskId: task.id,
+                      });
+                    }
                     const deliveredError = toBackgroundToolFailure(tc.name, neutralizedError);
                     const registryError = isCodeCall ? deliveredError : neutralizedError;
+                    /** Only an owner-authorized request is cancellation evidence.
+                     * Providers and timeout controllers also use AbortError, so
+                     * classifying by error shape would turn failures into a false
+                     * claim that the owner cancelled the task. */
                     const detachedTerminalStatus =
-                      toolError instanceof Error &&
-                      (toolError.name === 'AbortError' ||
-                        (toolError as Error & { code?: string }).code === 'ABORT_ERR')
-                        ? 'cancelled'
-                        : 'failed';
+                      backgroundAbortSource === 'manual' ? 'cancelled' : 'failed';
                     if (
                       !(await persistDetachedTerminal({
                         status: detachedTerminalStatus,
@@ -5126,17 +6910,31 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     ) {
                       return;
                     }
-                    backgroundTaskRegistry.fail(
-                      backgroundUserId,
-                      backgroundConversationId,
-                      task.id,
-                      registryError,
-                      /** Failed code tasks join the heal path too: without this,
-                       *  a full-row save reverting the error patch would leave
-                       *  the dispatch card on the handle JSON forever. */
-                      { harvestStarted: harvestEnabled },
-                    );
-                    await persistBackgroundResult({ output: deliveredError, status: 'error' });
+                    const settleOptions = { harvestStarted: harvestEnabled };
+                    if (detachedTerminalStatus === 'cancelled') {
+                      backgroundTaskRegistry.cancel(
+                        backgroundUserId,
+                        backgroundConversationId,
+                        task.id,
+                        registryError,
+                        settleOptions,
+                      );
+                    } else {
+                      backgroundTaskRegistry.fail(
+                        backgroundUserId,
+                        backgroundConversationId,
+                        task.id,
+                        registryError,
+                        /** Failed code tasks join the heal path too: without this,
+                         *  a full-row save reverting the error patch would leave
+                         *  the dispatch card on the handle JSON forever. */
+                        settleOptions,
+                      );
+                    }
+                    await persistSettledBackgroundResult({
+                      output: deliveredError,
+                      status: detachedTerminalStatus === 'cancelled' ? 'cancelled' : 'error',
+                    });
                     await wakeDetachedActor();
                   } finally {
                     if (producerRetirementTimeout != null) {
@@ -5145,6 +6943,74 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     await stopProducerHeartbeat();
                   }
                 })();
+                void settlement.then(
+                  () => {
+                    if (completionAdmission == null || !completionPreregistered) {
+                      resolveDurableReceipt();
+                    }
+                  },
+                  () => undefined,
+                );
+                backgroundTaskRegistry.trackShutdown(task, {
+                  settled: durableReceiptSettled,
+                  interrupt: (reason) => {
+                    if (backgroundAbortSource != null || backgroundAbortController.signal.aborted) {
+                      return;
+                    }
+                    backgroundAbortSource = 'shutdown';
+                    backgroundAbortController.abort(new DOMException(reason, 'AbortError'));
+                  },
+                  flush: async (reason) => {
+                    await stopProducerHeartbeat();
+                    if (durableReceiptWrite != null) {
+                      await durableReceiptWrite;
+                    } else if (settledReceipt != null) {
+                      await writeDurableReceipt({ ...settledReceipt, settledAt: new Date() });
+                    } else {
+                      forcedShutdownResult = true;
+                      const failure = toBackgroundToolFailure(tc.name, reason);
+                      backgroundTaskRegistry.fail(
+                        backgroundUserId,
+                        backgroundConversationId,
+                        task.id,
+                        isCodeCall ? failure : reason,
+                        { harvestStarted: harvestEnabled },
+                      );
+                      try {
+                        await persistDetachedTerminal({ status: 'failed', error: failure });
+                      } catch (detachedError) {
+                        logger.warn(
+                          `[background] Failed to settle detached action for interrupted task ${task.id}:`,
+                          detachedError,
+                        );
+                      }
+                      if (completionAdmission?.persistResult != null) {
+                        await writeDurableReceipt({
+                          status: 'error',
+                          output: failure,
+                          settledAt: new Date(),
+                        });
+                      } else if (completionAdmission != null) {
+                        await persistSettledBackgroundResult(
+                          { status: 'error', output: failure },
+                          true,
+                        );
+                      }
+                    }
+                    if (durableResultConfirmed || completionAdmission == null) {
+                      return;
+                    }
+                    if (settledReceipt != null && !forcedShutdownResult) {
+                      await settlement;
+                      if (durableResultConfirmed) {
+                        return;
+                      }
+                    }
+                    if (completionPreregistered) {
+                      throw new Error(`Background task ${task.id} has no durable shutdown result`);
+                    }
+                  },
+                });
                 if (
                   detachedReservation?.status === 'reserved' &&
                   eventActorDetachedAction != null &&
@@ -5166,6 +7032,10 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
               };
             };
 
+            const batchReq = mergedConfigurable?.req as ServerRequest | undefined;
+            const batchCodeApiRateLimitBudget = createCodeApiRateLimitBudget(
+              batchReq?.config?.endpoints?.agents?.codeApiMaxRetryWaitMs,
+            );
             const results: ToolExecuteResult[] = await Promise.all(
               toolCalls.map(async (tc: ToolCallRequest) => {
                 const preloadedNameBlock = preloadedNameBlocks.get(tc);
@@ -5190,6 +7060,10 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                   if (filteredArguments != null) {
                     return reportResult(filteredArguments);
                   }
+                  if (runSignal?.reason instanceof SteerToolInterrupt) {
+                    return reportResult(interruptedToolResult(tc.id));
+                  }
+                  onResultAdmissionStart?.(tc.id);
                   const pollContent = await runCheckBackgroundTask({
                     userId: backgroundUserId,
                     conversationId: backgroundConversationId,
@@ -5197,9 +7071,12 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     toolCallId: tc.id,
                     agentId,
                     runId: `${backgroundRunId ?? ''}:${tc.turn ?? ''}`,
+                    generationId: backgroundRunId,
                     subagentTasks,
                     claimBackgroundToolResult: backgroundToolCompletion?.claim,
                     recoverDeadBackgroundToolClaim: backgroundToolCompletion?.recoverDeadClaim,
+                    pendingCompletions: backgroundToolCompletion?.pending,
+                    ordinaryToolCancellation,
                   });
                   const taskSnapshot = getBackgroundTaskSnapshot({
                     userId: backgroundUserId,
@@ -5259,6 +7136,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                      *  ORIGINAL tool-call identity by the completion harvest. */
                     if (toolEndCallback && !(isCodeTask && pending.harvestStarted === true)) {
                       try {
+                        onResultAdmissionStart?.(tc.id);
                         await toolEndCallback(
                           {
                             input: tc.args,
@@ -5273,6 +7151,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                           {
                             ...(metadata ?? {}),
                             executingAgentId: agentId,
+                            stepId: tc.stepId,
                           } as ToolEndCallbackMetadata,
                         );
                       } catch (callbackError) {
@@ -5366,12 +7245,12 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       }
                     }
                     if (persistBackgroundCodeResult && delivery.messageId) {
-                      /** Error tasks carry their message in `error`, not
+                      /** Error/cancelled tasks carry their message in `error`, not
                        *  `result`; abort-confirmed timeouts store it raw, so
                        *  wrap here — `toBackgroundToolFailure` is a no-op for
                        *  already-wrapped detached failures. */
                       const reapplyOutput =
-                        delivery.status === 'error'
+                        delivery.status === 'error' || delivery.status === 'cancelled'
                           ? toBackgroundToolFailure(
                               delivery.toolName,
                               delivery.error ?? delivery.result ?? 'Background task failed',
@@ -5386,6 +7265,9 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                         agentId: delivery.agentId,
                         output: reapplyOutput,
                         attachments: delivery.attachments,
+                        ...(delivery.backgroundTask == null
+                          ? {}
+                          : { backgroundTask: delivery.backgroundTask }),
                         reapply: true,
                       }).catch((reapplyError) => {
                         logger.warn(
@@ -5403,7 +7285,31 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                   });
                 }
 
+                const usesCodeFiles =
+                  isCodeFileToolName(tc.name) ||
+                  isCodeSessionAwareToolCall(tc.name, mergedConfigurable);
+                if (runFileSharingActive && usesCodeFiles && isBackgroundRequested(tc.args)) {
+                  return reportResult(
+                    errorResult(tc, 'Shared-file code tools require foreground execution.'),
+                  );
+                }
+
+                /* Before the background dispatch and before the sandbox
+                 * authoring context is cloned below: both capture this call's
+                 * code-session context, and a copy taken now would stay the
+                 * pre-skill snapshot for the rest of the call's life. */
+                if (skillFilesHandoff != null && waitsForSkillFiles(tc)) {
+                  await skillFilesHandoff.applyTo(tc);
+                  if (runSignal?.aborted === true) {
+                    /** The Stop landed while the skill upload held this call.
+                     *  Starting the tool now would send a request the turn has
+                     *  already abandoned. */
+                    return reportResult(errorResult(tc, 'This operation was aborted'));
+                  }
+                }
+
                 if (
+                  scheduledMCPExecution?.enrolled !== true &&
                   backgroundToolSet.has(tc.name) &&
                   isBackgroundRequested(tc.args) &&
                   !toolRequiresEphemeralConnection(toolMap.get(tc.name)) &&
@@ -5416,6 +7322,10 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     persistBackgroundCodeResult == null
                   )
                 ) {
+                  if (runSignal?.reason instanceof SteerToolInterrupt) {
+                    return reportResult(interruptedToolResult(tc.id));
+                  }
+                  onResultAdmissionStart?.(tc.id);
                   return reportResult(await dispatchBackgroundToolCall(tc));
                 }
 
@@ -5430,10 +7340,15 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     isFileAuthoringCall &&
                     typeof (tc.args as { path?: unknown }).path === 'string' &&
                     !(tc.args as { path: string }).path.startsWith(SKILL_FILE_PREFIX);
+                  if (runSignal?.reason instanceof SteerToolInterrupt) {
+                    return interruptedToolResult(tc.id);
+                  }
                   let sandboxReadSucceeded = false;
                   if (
                     tc.name === Constants.SKILL_TOOL ||
                     tc.name === Constants.READ_FILE ||
+                    tc.name === SEARCH_WORKSPACE_TOOL_NAME ||
+                    tc.name === LIST_WORKSPACE_FILES_TOOL_NAME ||
                     isFileAuthoringCall
                   ) {
                     const req = mergedConfigurable?.req as ServerRequest | undefined;
@@ -5450,6 +7365,8 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                           options,
                           agentId,
                           req,
+                          runSignal,
+                          batchCodeApiRateLimitBudget,
                         );
                       } else if (tc.name === Constants.READ_FILE) {
                         handlerResult = await handleReadFileCall(
@@ -5460,6 +7377,23 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                           () => {
                             sandboxReadSucceeded = true;
                           },
+                          runSignal,
+                        );
+                      } else if (tc.name === SEARCH_WORKSPACE_TOOL_NAME) {
+                        handlerResult = await handleWorkspaceSearchCall(
+                          tc,
+                          mergedConfigurable,
+                          options,
+                          req,
+                          runSignal,
+                        );
+                      } else if (tc.name === LIST_WORKSPACE_FILES_TOOL_NAME) {
+                        handlerResult = await handleWorkspaceListCall(
+                          tc,
+                          mergedConfigurable,
+                          options,
+                          req,
+                          runSignal,
                         );
                       } else if (tc.name === CREATE_FILE_TOOL_NAME && isFileAuthoringCall) {
                         handlerResult = await handleCreateFileCall(
@@ -5469,6 +7403,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                           req,
                           sourceConfigurable,
                           sandboxContext,
+                          runSignal,
                         );
                       } else if (tc.name === EDIT_FILE_TOOL_NAME && isFileAuthoringCall) {
                         handlerResult = await handleEditFileCall(
@@ -5477,6 +7412,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                           options,
                           req,
                           sandboxContext,
+                          runSignal,
                         );
                       } else {
                         handlerResult = errorResult(tc, `Tool ${tc.name} not found`);
@@ -5492,18 +7428,32 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       const { message, logContext } = getSafeToolError(toolError);
                       const filteredError = filteredToolOutputResult(tc, req, {
                         errorMessage: message,
+                        upstreamBody:
+                          toolError instanceof WorkspaceToolHttpError
+                            ? toolError.upstreamBody
+                            : undefined,
                       });
                       if (filteredError != null) {
                         logger.error(`[ON_TOOL_EXECUTE] Tool ${tc.name} error`, {
-                          name: logContext.name,
+                          errorName: logContext.errorName,
                           contentFiltered: true,
                         });
                         return filteredError;
                       }
-                      logger.error(`[ON_TOOL_EXECUTE] Tool ${tc.name} error`, {
+                      const context = {
                         ...logContext,
+                        toolName: tc.name,
+                        toolCallId: tc.id,
                         toolCallArgsShape: getValueShape(tc.args),
-                      });
+                      };
+                      if (runSignal?.aborted === true && isAbortError(toolError)) {
+                        logger.debug(
+                          `[ON_TOOL_EXECUTE] Tool ${tc.name} cancelled by run abort`,
+                          context,
+                        );
+                      } else {
+                        logger.error(`[ON_TOOL_EXECUTE] Tool ${tc.name} error`, context);
+                      }
                       return {
                         toolCallId: tc.id,
                         status: 'error' as const,
@@ -5512,6 +7462,9 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       };
                     }
 
+                    if (runSignal?.reason instanceof SteerToolInterrupt) {
+                      return interruptedToolResult(tc.id);
+                    }
                     const filteredOutput = filteredToolOutputResult(tc, req, {
                       content: handlerResult.content,
                       artifact: handlerResult.artifact,
@@ -5524,6 +7477,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                        * and re-executed — the blocked output stays blank. */
                       if (toolEndCallback && handlerResult.errorMessage == null) {
                         try {
+                          onResultAdmissionStart?.(tc.id);
                           await toolEndCallback(
                             {
                               input: tc.args,
@@ -5547,6 +7501,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
 
                     if (toolEndCallback && handlerResult.artifact) {
                       try {
+                        onResultAdmissionStart?.(tc.id);
                         await toolEndCallback(
                           {
                             input: tc.args,
@@ -5566,6 +7521,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                               | undefined,
                             ...metadata,
                             executingAgentId: agentId,
+                            stepId: tc.stepId,
                             codeExecutionContext,
                           },
                         );
@@ -5629,7 +7585,9 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     );
                     return missingToolResult;
                   }
+                  recordAttachedCommand(tc, tool);
 
+                  let normalizedArgs: unknown = tc.args;
                   try {
                     const toolCallConfig = buildToolCallConfig(tc, mergedConfigurable);
 
@@ -5733,7 +7691,11 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                                 eligiblePtcToolMap.keys(),
                                 ptcReq,
                               ),
-                              emit: emitPtcProgress,
+                              emit: (event) => {
+                                if (!(runSignal?.reason instanceof SteerToolInterrupt)) {
+                                  emitPtcProgress(event);
+                                }
+                              },
                             })
                           : eligiblePtcToolMap;
                       }
@@ -5750,7 +7712,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       (hasRunInBackgroundArg(tc.args) && !toolDeclaresRunInBackgroundParam(tool))
                         ? stripRunInBackgroundArg(tc.args)
                         : tc.args;
-                    const normalizedArgs = normalizeToolInvokeArgs(
+                    normalizedArgs = normalizeToolInvokeArgs(
                       stripIntentForInvoke(foregroundArgs, tool),
                       tool,
                     );
@@ -5765,8 +7727,19 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     const result = await tool.invoke(normalizedArgs, {
                       toolCall: toolCallConfig,
                       configurable: mergedConfigurable,
-                      metadata,
+                      metadata: { ...metadata, executingAgentId: agentId },
+                      /** The run's cancellation signal. Without it a foreground
+                       *  tool call keeps running after Stop: an MCP call never
+                       *  sends `notifications/cancelled`, and every other
+                       *  signal-aware tool keeps burning quota on a turn the
+                       *  user already abandoned. Detached background calls
+                       *  intentionally use their own controller instead. */
+                      ...(runSignal != null && { signal: runSignal }),
                     } as Record<string, unknown>);
+
+                    if (runSignal?.reason instanceof SteerToolInterrupt) {
+                      return interruptedToolResult(tc.id);
+                    }
 
                     /* Only sandbox-bound calls carry a runtime session hint, so
                      * this refreshes the prewarm module's warm window without
@@ -5802,6 +7775,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                        * and re-executed — the blocked output stays blank. */
                       if (toolEndCallback) {
                         try {
+                          onResultAdmissionStart?.(tc.id);
                           await toolEndCallback(
                             {
                               input: tc.args,
@@ -5824,6 +7798,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                     }
 
                     if (toolEndCallback) {
+                      onResultAdmissionStart?.(tc.id);
                       await toolEndCallback(
                         {
                           input: tc.args,
@@ -5843,6 +7818,7 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                             | undefined,
                           ...metadata,
                           executingAgentId: agentId,
+                          stepId: tc.stepId,
                           codeExecutionContext,
                         },
                       );
@@ -5852,7 +7828,10 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       toolCallId: tc.id,
                       content: cleanedContent,
                       artifact: result.artifact,
-                      status: 'success' as const,
+                      status: result.status === 'error' ? ('error' as const) : ('success' as const),
+                      ...(result.status === 'error' && {
+                        errorMessage: getToolFailureFeedback(cleanedContent),
+                      }),
                     };
                   } catch (toolError) {
                     if (toolError instanceof ContentFilterError) {
@@ -5862,20 +7841,52 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                       });
                       return errorResult(tc, modelBoundContentFilterErrorMessage(toolError.body));
                     }
-                    const { message, logContext } = getSafeToolError(toolError);
+                    const { message, logContext } = getSafeToolError(
+                      toolError,
+                      toolValidationFeedback(
+                        toolError,
+                        tc.name,
+                        tool.schema,
+                        normalizedArgs,
+                        backgroundControlEnabled,
+                      ),
+                    );
+                    /** A user Stop rejects every in-flight call at once. That is
+                     *  the abort working, not a fault, so it is logged at debug.
+                     *  An aborted run says the turn is over, not that THIS
+                     *  rejection was the cancellation, so the error must look
+                     *  like one too; an unrelated failure racing the Stop stays
+                     *  at error level. Either way the level is all that changes
+                     *  — filtering and the result shape are identical. */
+                    const logToolFailure = (context: Record<string, unknown>): void => {
+                      if (runSignal?.aborted === true && isAbortError(toolError)) {
+                        logger.debug(
+                          `[ON_TOOL_EXECUTE] Tool ${tc.name} cancelled by run abort`,
+                          context,
+                        );
+                        return;
+                      }
+                      logger.error(`[ON_TOOL_EXECUTE] Tool ${tc.name} error`, context);
+                    };
                     const req = mergedConfigurable?.req as ServerRequest | undefined;
                     const filteredError = filteredToolOutputResult(tc, req, {
                       errorMessage: message,
+                      upstreamBody:
+                        toolError instanceof WorkspaceToolHttpError
+                          ? toolError.upstreamBody
+                          : undefined,
                     });
                     if (filteredError != null) {
-                      logger.error(`[ON_TOOL_EXECUTE] Tool ${tc.name} error`, {
-                        name: logContext.name,
+                      logToolFailure({
+                        errorName: logContext.errorName,
                         contentFiltered: true,
                       });
                       return filteredError;
                     }
-                    logger.error(`[ON_TOOL_EXECUTE] Tool ${tc.name} error`, {
+                    logToolFailure({
                       ...logContext,
+                      toolName: tc.name,
+                      toolCallId: tc.id,
                       toolCallArgsShape: getValueShape(tc.args),
                       toolInputSchemaKind: getToolInputSchemaKind(tool),
                     });
@@ -5888,9 +7899,18 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                   }
                 };
 
+                const executeWithFileScope = (sandboxContext?: SandboxSessionContext) =>
+                  runFileSharingActive && usesCodeFiles && runFiles != null && agentId != null
+                    ? runFiles.withCodeExecution(
+                        agentId,
+                        executionContext,
+                        runSignal ?? new AbortController().signal,
+                        () => execute(sandboxContext),
+                      )
+                    : execute(sandboxContext);
                 const queueKey = getFileAuthoringQueueKey(tc, mergedConfigurable);
                 if (!queueKey) {
-                  return reportResult(await execute());
+                  return reportResult(await executeWithFileScope());
                 }
                 let sandboxContext: SandboxSessionContext | undefined;
                 if (queueKey.startsWith('sandbox:')) {
@@ -5901,8 +7921,8 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
                 }
                 const previous = authoringQueues.get(queueKey) ?? Promise.resolve();
                 const resultPromise = previous.then(
-                  () => execute(sandboxContext),
-                  () => execute(sandboxContext),
+                  () => executeWithFileScope(sandboxContext),
+                  () => executeWithFileScope(sandboxContext),
                 );
                 authoringQueues.set(
                   queueKey,
@@ -5927,16 +7947,6 @@ export function createToolExecuteHandler(options: ToolExecuteOptions): EventHand
       }
     },
   };
-}
-
-/**
- * Creates a handlers object that includes ON_TOOL_EXECUTE.
- * Can be merged with other handler objects.
- */
-export function createToolExecuteHandlers(
-  options: ToolExecuteOptions,
-): Record<string, EventHandler> {
-  return {
-    [GraphEvents.ON_TOOL_EXECUTE]: createToolExecuteHandler(options),
-  };
+  authoredSkills.bind(handler);
+  return handler;
 }

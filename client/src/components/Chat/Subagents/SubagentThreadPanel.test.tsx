@@ -1,34 +1,89 @@
 import React from 'react';
-import { ContentTypes, ForkOptions } from 'librechat-data-provider';
-import { RecoilRoot, useRecoilValue, useSetRecoilState } from 'recoil';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type {
-  ParentSubagentSummary,
-  SubagentThreadView,
-  TMessageContentParts,
-} from 'librechat-data-provider';
-import type { ActiveSubagentPanel } from '~/store/subagents';
+import { useAtomValue, useSetAtom } from 'jotai';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { initSubagentAggregatorState, initSubagentTickerState } from '@librechat/chat';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { ContentTypes, EModelEndpoint, ForkOptions, QueryKeys } from 'librechat-data-provider';
 import {
   activeSubagentPanel,
   subagentProgressByToolCallId,
   subagentProgressKey,
-} from '~/store/subagents';
-import { initSubagentAggregatorState, initSubagentTickerState } from '~/utils/subagentContent';
+} from '@librechat/chat/react';
+import type {
+  TMessage,
+  SubagentThreadView,
+  TMessageContentParts,
+  ParentSubagentSummary,
+} from 'librechat-data-provider';
+import type { ActiveSubagentPanel } from '@librechat/chat/react';
+import type { JotaiStore } from 'test/harness';
+import { ChatSurfaceHarness, testChatSurface } from 'test/harness';
 import SubagentThreadPanel from './SubagentThreadPanel';
+import { useOpenSubagentPanel } from './surface';
+import { getDraft } from '~/utils';
 
 const mockUseSubagentThreadQuery = jest.fn();
+const mockUseToolCallPartQuery = jest.fn(
+  (
+    ..._args: unknown[]
+  ): { data?: unknown; isError: boolean; refetch?: () => Promise<unknown> } => ({
+    data: undefined,
+    isError: false,
+  }),
+);
 const mockUseSubagentActivityStream = jest.fn();
 const mockForkMutate = jest.fn();
 const mockControlMutate = jest.fn();
 const mockNavigateToConvo = jest.fn();
+const mockNavigate = jest.fn();
 const mockShowToast = jest.fn();
 const mockGetSubagentThread = jest.fn();
 const mockApprovalProviderMounted = jest.fn();
 const mockApprovalProviderUnmounted = jest.fn();
 let mockIsMobile = false;
+let mockCoarsePointer = false;
+let mockViewportWidth: number | null = null;
+let mockRemScale = 1;
 let mockParentChildrenByMessage = new Map<string, ParentSubagentSummary[]>();
 let mockParentChildrenByThread = new Map<string, ParentSubagentSummary>();
 const mockRefreshParentChildren = jest.fn().mockResolvedValue(undefined);
+/** The host's half of the chat surface, supplied here instead of reached for:
+ *  what the panel promises is that it consults the preference and hands the
+ *  words over, not which application atom either one lives in. */
+let mockEnterToSend = true;
+const mockClaimForeground = jest.fn();
+const mockHandOffComposerText = jest.fn();
+/** Real, per test: the panel reads the dispatching message from the parent
+ *  conversation's loaded thread, the cache main chat itself renders from. */
+let queryClient = new QueryClient();
+
+function Root({
+  seed,
+  children,
+}: {
+  seed?: (store: JotaiStore) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ChatSurfaceHarness
+        seed={seed}
+        surface={testChatSurface({
+          enterToSend: mockEnterToSend,
+          claimForeground: mockClaimForeground,
+          handOffComposerText: mockHandOffComposerText,
+        })}
+      >
+        {children}
+      </ChatSurfaceHarness>
+    </QueryClientProvider>
+  );
+}
+
+jest.mock('react-router-dom', () => ({
+  ...jest.requireActual('react-router-dom'),
+  useNavigate: () => mockNavigate,
+}));
 
 jest.mock('librechat-data-provider', () => {
   const actual = jest.requireActual('librechat-data-provider');
@@ -43,7 +98,11 @@ jest.mock('librechat-data-provider', () => {
 
 jest.mock('~/data-provider', () => ({
   ACTIVE_THREAD_REFRESH_MS: 2000,
+  /** The panel's bottom clearance follows the conversation's configured footer
+   *  (`useConfiguredFooter`), so the panel now reads the startup config. */
+  useGetStartupConfig: () => ({ data: undefined }),
   useSubagentThreadQuery: (...args: unknown[]) => mockUseSubagentThreadQuery(...args),
+  useToolCallPartQuery: (...args: unknown[]) => mockUseToolCallPartQuery(...args),
   subagentThreadHasTaskEvidence: (view: SubagentThreadView | undefined, taskId: string): boolean =>
     view?.messages.some(
       (message) =>
@@ -69,22 +128,46 @@ jest.mock('~/data-provider', () => ({
   }),
 }));
 
-jest.mock('~/data-provider/Subagents/useSubagentActivityStream', () => ({
-  __esModule: true,
-  default: (...args: unknown[]) => mockUseSubagentActivityStream(...args),
+jest.mock('@librechat/chat/react', () => ({
+  ...jest.requireActual('@librechat/chat/react'),
+  useSubagentActivityStream: (...args: unknown[]) => mockUseSubagentActivityStream(...args),
 }));
 
 jest.mock('~/hooks', () => ({
-  useFocusTrap: jest.fn(),
-  useLocalize: () => (key: string) => key,
+  /** The real trap: its Escape listener is native and sits on the panel, so it
+   *  runs before the panel's own React handler. Stubbing it made the panel's
+   *  Escape assertions pass in both directions. */
+  useFocusTrap: jest.requireActual('~/hooks/useFocusTrap').default,
+  useLocalize: () => (key: string, values?: { 0: string }) =>
+    values == null ? key : `${key}: ${values[0]}`,
   useNavigateToConvo: () => ({ navigateToConvo: mockNavigateToConvo }),
 }));
 
 jest.mock('~/Providers', () => ({
   useAgentsMapContext: () => ({
-    'agent-1': { id: 'agent-1', name: 'Analyst One' },
+    'agent-1': { id: 'agent-1', name: 'Analyst One', avatar: { filepath: '/analyst.png' } },
     'agent-2': { id: 'agent-2', name: 'Analyst Two' },
   }),
+}));
+
+/** Main chat's author glyph, reduced to the face it draws: the agent's avatar
+ *  when it has one. */
+jest.mock('~/components/Chat/Messages/MessageIcon', () => ({
+  __esModule: true,
+  default: ({
+    agent,
+    iconData,
+  }: {
+    agent?: { avatar?: { filepath?: string } };
+    iconData?: { iconURL?: string };
+  }) => {
+    const src = iconData?.iconURL ?? agent?.avatar?.filepath;
+    return src != null ? (
+      <img src={src} alt="" data-testid="author-face" />
+    ) : (
+      <span data-testid="author-face" />
+    );
+  },
 }));
 
 jest.mock('./ParentSubagentsProvider', () => ({
@@ -117,7 +200,7 @@ jest.mock('./SubagentActivity', () => ({
   SubagentActivityScrollSurface: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="shared-scroll-surface">{children}</div>
   ),
-  default: ({
+  default: function MockActivity({
     activity,
     activityId,
     state,
@@ -132,135 +215,270 @@ jest.mock('./SubagentActivity', () => ({
     activityId?: string;
     state: string;
     onCancelControl?: (controlId: string) => void;
-  }) => (
-    <div
-      data-testid="shared-activity"
-      data-activity-id={activityId}
-      data-state={state}
-      data-status={activity.status}
-      data-can-withdraw={onCancelControl != null ? 'true' : 'false'}
-    >
-      {activity.prompt}
-      {activity.items.map((item, index) => (
-        <span key={index}>{item.text ?? item.type}</span>
-      ))}
-      {activity.controls?.map((control) => (
-        <span key={control.invocationId}>{control.status}</span>
-      ))}
-      {onCancelControl != null && (
-        <button
-          type="button"
-          data-testid="withdraw-control"
-          onClick={() => onCancelControl('control-1')}
-        />
-      )}
-    </div>
-  ),
+  }) {
+    const { useContext } = jest.requireActual<typeof import('react')>('react');
+    const { TaskContentScopeContext } = jest.requireActual<
+      typeof import('~/data-provider/Subagents/content')
+    >('~/data-provider/Subagents/content');
+    const scope = useContext(TaskContentScopeContext);
+    return (
+      <div
+        data-testid="shared-activity"
+        data-receipt-scope={JSON.stringify(scope)}
+        data-activity-id={activityId}
+        data-state={state}
+        data-status={activity.status}
+        data-can-withdraw={onCancelControl != null ? 'true' : 'false'}
+      >
+        {activity.prompt}
+        {activity.items.map((item, index) => (
+          <span key={index}>{item.text ?? item.type}</span>
+        ))}
+        {activity.controls?.map((control) => (
+          <span key={control.invocationId}>{control.status}</span>
+        ))}
+        {onCancelControl != null && (
+          <button
+            type="button"
+            data-testid="withdraw-control"
+            onClick={() => onCancelControl('control-1')}
+          />
+        )}
+      </div>
+    );
+  },
 }));
 
 jest.mock('./SubagentConversation', () => ({
   __esModule: true,
-  default: ({
+  default: function MockConversation({
     turns,
+    author,
+    parentAuthor,
     stateByTask,
     detailStateByTask,
     onLoadTurnDetails,
   }: {
+    author: { name: string; icon: React.ReactNode };
+    parentAuthor: { name: string };
     turns: Array<{
       taskId: string;
+      outcome?: { text: string };
       trigger: { summary: string };
       activity: { items: Array<{ text?: string }>; activityTruncated?: boolean };
     }>;
     stateByTask?: ReadonlyMap<string, string>;
     detailStateByTask?: ReadonlyMap<string, string>;
     onLoadTurnDetails?: (taskId: string) => void;
-  }) => (
-    <div
-      data-testid="subagent-conversation"
-      data-state={turns[0] == null ? undefined : stateByTask?.get(turns[0].taskId)}
-    >
-      {turns.map((turn) => (
-        <div key={turn.taskId} data-testid="conversation-turn">
-          {turn.trigger.summary}
-          {turn.activity.items.map((item, index) => (
-            <span key={index}>{item.text}</span>
-          ))}
-          {turn.activity.activityTruncated === true && onLoadTurnDetails != null && (
-            <button type="button" onClick={() => onLoadTurnDetails(turn.taskId)}>
-              {`load-${turn.taskId}`}
-            </button>
-          )}
-          {detailStateByTask?.get(turn.taskId)}
-        </div>
-      ))}
-    </div>
-  ),
+  }) {
+    const { useContext } = jest.requireActual<typeof import('react')>('react');
+    const { TaskContentScopeContext } = jest.requireActual<
+      typeof import('~/data-provider/Subagents/content')
+    >('~/data-provider/Subagents/content');
+    const scope = useContext(TaskContentScopeContext);
+    return (
+      <div
+        data-testid="subagent-conversation"
+        data-receipt-scope={JSON.stringify(scope)}
+        data-state={turns[0] == null ? undefined : stateByTask?.get(turns[0].taskId)}
+        data-author={author.name}
+        data-parent-author={parentAuthor.name}
+      >
+        {author.icon}
+        {turns.map((turn) => (
+          <div key={turn.taskId} data-testid="conversation-turn" data-outcome={turn.outcome?.text}>
+            {turn.trigger.summary}
+            {turn.activity.items.map((item, index) => (
+              <span key={index}>{item.text}</span>
+            ))}
+            {turn.activity.activityTruncated === true && onLoadTurnDetails != null && (
+              <button type="button" onClick={() => onLoadTurnDetails(turn.taskId)}>
+                {`load-${turn.taskId}`}
+              </button>
+            )}
+            {detailStateByTask?.get(turn.taskId)}
+          </div>
+        ))}
+      </div>
+    );
+  },
 }));
 
-jest.mock('@librechat/client', () => {
-  const mockReact = jest.requireActual<typeof import('react')>('react');
-  const MockSelectContext = mockReact.createContext((_value: string): void => {});
-  return {
-    Alert: ({ children, ...props }: React.ComponentProps<'div'>) => (
-      <div role="alert" {...props}>
-        {children}
-      </div>
-    ),
-    Button: ({ children, ...props }: React.ComponentProps<'button'>) => (
-      <button {...props}>{children}</button>
-    ),
-    Select: ({
-      children,
-      onValueChange,
-    }: {
-      children: React.ReactNode;
-      onValueChange: (value: string) => void;
-    }) => <MockSelectContext.Provider value={onValueChange}>{children}</MockSelectContext.Provider>,
-    SelectTrigger: ({ children, ...props }: React.ComponentProps<'button'>) => (
-      <button role="combobox" aria-controls="mock-select-options" aria-expanded="true" {...props}>
-        {children}
+/** The shared composer's own Enter contract, for the mock to fall back on when
+ *  a host supplies no key policy. */
+const mockComposerVerdict = (
+  event: React.KeyboardEvent<HTMLTextAreaElement>,
+  submitOnEnter: boolean,
+): 'submit' | 'newline' | 'none' => {
+  if (event.key !== 'Enter' || event.shiftKey) return 'none';
+  if (!submitOnEnter && !(event.metaKey || event.ctrlKey)) return 'newline';
+  return 'submit';
+};
+
+jest.mock('@librechat/client', () => ({
+  Alert: ({ children, ...props }: React.ComponentProps<'div'>) => (
+    <div role="alert" {...props}>
+      {children}
+    </div>
+  ),
+  Button: ({ children, ...props }: React.ComponentProps<'button'>) => (
+    <button {...props}>{children}</button>
+  ),
+  Skeleton: () => null,
+  /** Renders the anchored control itself; the tooltip text is the control's
+   *  accessible name here, which is what the assertions read. */
+  TooltipAnchor: ({ render }: { render: React.ReactElement }) => render,
+  ControlCombobox: ({
+    items,
+    setValue,
+    ariaLabel,
+    displayValue,
+    onOpenChange,
+    disabled,
+  }: {
+    items: { value: string; label: string }[];
+    setValue: (value: string) => void;
+    ariaLabel: string;
+    displayValue?: string;
+    onOpenChange?: (open: boolean) => void;
+    disabled?: boolean;
+  }) => (
+    <div>
+      <button
+        type="button"
+        role="combobox"
+        aria-controls="mock-combobox-options"
+        aria-expanded="true"
+        aria-label={ariaLabel}
+        disabled={disabled}
+        onClick={() => onOpenChange?.(true)}
+      >
+        {displayValue}
       </button>
-    ),
-    SelectValue: () => null,
-    SelectContent: ({ children }: { children: React.ReactNode }) => (
-      <div id="mock-select-options">{children}</div>
-    ),
-    SelectItem: ({
-      value,
-      children,
-      ...props
-    }: React.ComponentProps<'button'> & { value: string }) => {
-      const onValueChange = mockReact.useContext(MockSelectContext);
-      return (
-        <button role="option" aria-selected="false" onClick={() => onValueChange(value)} {...props}>
-          {children}
+      <div id="mock-combobox-options">
+        {items.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            role="option"
+            aria-selected="false"
+            disabled={disabled}
+            onClick={() => setValue(item.value)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  ),
+  /** Mirrors the real composer's contract: one field, the caller's action row,
+   *  and a send control whose accessible name says what Enter will do. */
+  Composer: ({
+    value,
+    onChange,
+    onSubmit,
+    canSubmit,
+    submitLabel,
+    ariaLabel,
+    placeholder,
+    disabled,
+    actions,
+    submitOnEnter = true,
+    resolveKeyVerdict,
+    maxLength,
+    onStop,
+    stopLabel,
+    submitActions,
+  }: {
+    value: string;
+    onChange: (value: string) => void;
+    onSubmit: (event?: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+    canSubmit: boolean;
+    submitLabel: string;
+    ariaLabel: string;
+    placeholder?: string;
+    disabled?: boolean;
+    actions?: React.ReactNode;
+    submitOnEnter?: boolean;
+    resolveKeyVerdict?: (
+      event: React.KeyboardEvent<HTMLTextAreaElement>,
+      isComposing: boolean,
+    ) => 'submit' | 'block' | 'newline' | 'none';
+    maxLength?: number;
+    onStop?: () => void;
+    stopLabel?: string;
+    submitActions?: Array<{
+      key: string;
+      label: string;
+      disabled?: boolean;
+      onClick: () => void;
+    }>;
+  }) => (
+    <div>
+      <textarea
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        value={value}
+        disabled={disabled}
+        maxLength={maxLength}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          const verdict =
+            resolveKeyVerdict?.(event, false) ?? mockComposerVerdict(event, submitOnEnter);
+          if (verdict !== 'submit') return;
+          event.preventDefault();
+          /** The real composer hands the submitting event to the host, which is
+           *  how a chord picks its control; a pointer click passes nothing. */
+          if (canSubmit && value.trim() !== '') onSubmit(event);
+        }}
+      />
+      {actions}
+      {/* The real composer hides these behind the send control until it is
+          hovered; rendering them inline keeps them reachable to assertions. */}
+      {(submitActions ?? []).map((action) => (
+        <button
+          key={action.key}
+          type="button"
+          aria-disabled={action.disabled === true}
+          onClick={action.disabled === true ? undefined : action.onClick}
+        >
+          {action.label}
         </button>
-      );
-    },
-    composerSurfaceClasses: () => '',
-    composerSurfaceShadow: { focused: '', blurred: '', within: '' },
-    TextareaAutosize: ({
-      minRows: _minRows,
-      maxRows: _maxRows,
-      ...props
-    }: React.ComponentProps<'textarea'> & { minRows?: number; maxRows?: number }) => (
-      <textarea {...props} />
-    ),
-    useMediaQuery: () => mockIsMobile,
-    useToastContext: () => ({ showToast: mockShowToast }),
-  };
-});
+      ))}
+      {onStop != null && value.trim() === '' ? (
+        <button type="button" aria-label={stopLabel} onClick={onStop}>
+          {stopLabel}
+        </button>
+      ) : (
+        <button
+          type="button"
+          aria-label={submitLabel}
+          disabled={disabled === true || !canSubmit}
+          onClick={() => onSubmit()}
+        >
+          {submitLabel}
+        </button>
+      )}
+    </div>
+  ),
+  useRemScale: () => mockRemScale,
+  useMediaQuery: (query: string) => {
+    if (query.includes('hover')) return mockCoarsePointer;
+    if (mockViewportWidth == null) return mockIsMobile;
+    return mockViewportWidth <= Number(/max-width:\s*([\d.]+)/.exec(query)?.[1]);
+  },
+  useToastContext: () => ({ showToast: mockShowToast }),
+}));
 
 jest.mock('lucide-react', () => ({
   AlertCircle: () => null,
-  Bot: () => null,
-  CornerDownRight: () => null,
+  ArrowUpRight: () => null,
   CornerUpLeft: () => null,
   CheckCircle2: () => null,
+  Clock: () => null,
   Clock3: () => null,
-  ListEnd: () => null,
-  MessagesSquare: () => null,
-  OctagonX: () => null,
+  Feather: () => null,
+  OctagonPause: () => null,
   X: () => null,
   XCircle: () => null,
   Zap: () => null,
@@ -309,15 +527,34 @@ const completedView: SubagentThreadView = {
   ],
 };
 
+const completedTurns: SubagentThreadView['turns'] = [
+  {
+    taskId: 'task',
+    trigger: { kind: 'parent_dispatch', summary: 'Historical request.' },
+    status: 'completed',
+    activity: completedView.activity,
+    activityTruncated: false,
+    messages: completedView.messages,
+  },
+];
+
 describe('SubagentThreadPanel', () => {
   beforeEach(() => {
+    queryClient = new QueryClient();
     window.sessionStorage.clear();
     mockIsMobile = false;
+    mockCoarsePointer = false;
+    mockViewportWidth = null;
+    mockRemScale = 1;
+    mockEnterToSend = true;
+    mockClaimForeground.mockClear();
+    mockHandOffComposerText.mockClear();
     mockApprovalProviderMounted.mockClear();
     mockApprovalProviderUnmounted.mockClear();
     mockForkMutate.mockClear();
     mockControlMutate.mockClear();
     mockNavigateToConvo.mockClear();
+    mockNavigate.mockClear();
     mockShowToast.mockClear();
     mockGetSubagentThread.mockReset();
     mockRefreshParentChildren.mockClear();
@@ -329,6 +566,1014 @@ describe('SubagentThreadPanel', () => {
     jest.restoreAllMocks();
   });
 
+  it.each([false, true])(
+    'provides the exact durable receipt scope with conversation projection=%s',
+    (projected) => {
+      mockUseSubagentThreadQuery.mockReturnValue({
+        data: {
+          ...completedView,
+          messages: projected ? completedView.messages : [],
+          turns: projected ? completedTurns : undefined,
+        },
+        isLoading: false,
+        isError: false,
+        isReadinessPending: false,
+      });
+      render(
+        <Root>
+          <SubagentThreadPanel selection={selection} />
+        </Root>,
+      );
+      const surface =
+        screen.queryByTestId('shared-activity') ?? screen.getByTestId('subagent-conversation');
+      expect(surface).toHaveAttribute(
+        'data-receipt-scope',
+        JSON.stringify({
+          parentConversationId: selection.parentConversationId,
+          threadId: 'child-thread',
+          taskId: 'task',
+        }),
+      );
+    },
+  );
+
+  it('isolates historical event receipt scopes from the selected task', () => {
+    const child: ParentSubagentSummary = {
+      threadId: 'child-thread',
+      parentMessageId: 'parent-message',
+      subagentType: 'researcher',
+      subagentKind: 'agent',
+      title: 'Worker',
+      origin: 'event',
+      actorId: 'actor',
+      status: 'completed',
+      latestTaskId: 'task',
+      tasks: [
+        { taskId: 'task', status: 'completed' },
+        { taskId: 'earlier', status: 'completed' },
+      ],
+      tasksTruncated: false,
+    };
+    mockParentChildrenByThread = new Map([[child.threadId, child]]);
+    mockParentChildrenByMessage = new Map([['parent-message', [child]]]);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, turns: undefined },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    render(
+      <Root>
+        <SubagentThreadPanel
+          selection={{
+            ...selection,
+            event: { actorId: 'actor', progressKey: 'event-task:child-thread:task' },
+          }}
+        />
+      </Root>,
+    );
+    expect(
+      screen
+        .getAllByTestId('shared-activity')
+        .map((surface) => JSON.parse(surface.getAttribute('data-receipt-scope')!)),
+    ).toEqual([
+      { parentConversationId: 'parent-conversation', threadId: 'child-thread', taskId: 'earlier' },
+      { parentConversationId: 'parent-conversation', threadId: 'child-thread', taskId: 'task' },
+    ]);
+  });
+
+  it('does not provide private receipt scope for a foreground activity without a durable task', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({ isLoading: false, isError: false });
+    render(
+      <Root>
+        <SubagentThreadPanel selection={{ ...selection, durable: undefined }} />
+      </Root>,
+    );
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-receipt-scope',
+      'null',
+    );
+  });
+  it.each(['agent-1', 'missing-agent', 'self'])(
+    'resolves the saved foreground identity %s in the panel',
+    (subagentType) => {
+      mockUseSubagentThreadQuery.mockReturnValue({ isLoading: false, isError: false });
+      const foregroundSelection = {
+        ...selection,
+        durable: undefined,
+        subagentType,
+        subagentIdentity: {
+          subagentKind: 'agent' as const,
+          subagentAgentId: subagentType === 'self' ? 'agent-2' : subagentType,
+        },
+      };
+      /** The dispatching agent, as main chat holds it: a self-spawn is that
+       *  agent working on its own behalf, so it takes the parent's name. */
+      queryClient.setQueryData<TMessage[]>(
+        [QueryKeys.messages, 'parent-conversation'],
+        [
+          {
+            messageId: 'parent-message',
+            parentMessageId: null,
+            conversationId: 'parent-conversation',
+            isCreatedByUser: false,
+            endpoint: EModelEndpoint.agents,
+            model: 'agent-2',
+            sender: 'Analyst Two',
+            text: '',
+          } as unknown as TMessage,
+        ],
+      );
+      const { container } = render(
+        <Root>
+          <SubagentThreadPanel selection={foregroundSelection} />
+        </Root>,
+      );
+      const titles: Record<string, string> = {
+        'agent-1': 'Analyst One',
+        'missing-agent': 'com_ui_subagent_actor',
+        self: 'Analyst Two',
+      };
+      expect(screen.getByRole('heading', { name: titles[subagentType] })).toBeInTheDocument();
+      /** Never the id: an unresolvable agent is named generically. */
+      expect(screen.queryByText(/missing-agent/)).not.toBeInTheDocument();
+      if (subagentType === 'agent-1') {
+        expect(container.querySelector('header img[src="/analyst.png"]')).toBeInTheDocument();
+      }
+    },
+  );
+
+  it('uses the durable title when the child agent is unavailable', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { ...completedView, agentId: 'agent_deleted', title: 'Historical Reviewer' },
+    });
+    render(
+      <Root>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: 'Historical Reviewer' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveAttribute(
+      'placeholder',
+      'com_endpoint_message_new: Historical Reviewer',
+    );
+  });
+
+  it('restores a self-spawn with the complete historical parent author', () => {
+    queryClient.setQueryData<TMessage[]>(
+      [QueryKeys.messages, 'parent-conversation'],
+      [
+        {
+          messageId: 'parent-message',
+          parentMessageId: null,
+          conversationId: 'parent-conversation',
+          isCreatedByUser: false,
+          endpoint: EModelEndpoint.agents,
+          model: 'agent_deleted',
+          sender: 'Historical Parent',
+          iconURL: '/historical-parent.png',
+          text: '',
+        },
+      ],
+    );
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        ...completedView,
+        subagentType: 'self',
+        agentId: 'agent_deleted',
+        turns: completedTurns,
+      },
+    });
+    const { container } = render(
+      <Root>
+        <SubagentThreadPanel
+          selection={{
+            ...selection,
+            subagentType: 'self',
+          }}
+        />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: 'Historical Parent' })).toBeInTheDocument();
+    expect(container.querySelector('header img[src="/historical-parent.png"]')).toBeInTheDocument();
+    const conversation = screen.getByTestId('subagent-conversation');
+    expect(conversation).toHaveAttribute('data-author', 'Historical Parent');
+    expect(within(conversation).getByRole('img', { hidden: true })).toHaveAttribute(
+      'src',
+      '/historical-parent.png',
+    );
+  });
+
+  it.each(['selection', 'durable'])(
+    'keeps a graph named self distinct from its parent (%s identity)',
+    (source) => {
+      queryClient.setQueryData<TMessage[]>(
+        [QueryKeys.messages, 'parent-conversation'],
+        [
+          {
+            messageId: 'parent-message',
+            parentMessageId: null,
+            conversationId: 'parent-conversation',
+            isCreatedByUser: false,
+            endpoint: EModelEndpoint.agents,
+            model: 'agent_deleted',
+            sender: 'Historical Parent',
+            iconURL: '/historical-parent.png',
+            text: '',
+          },
+        ],
+      );
+      mockUseSubagentThreadQuery.mockReturnValue({
+        isLoading: false,
+        isError: false,
+        data: {
+          ...completedView,
+          agentId: undefined,
+          subagentType: 'self',
+          title: 'self',
+          subagentKind: source === 'durable' ? 'graph' : undefined,
+          turns: completedTurns,
+        },
+      });
+      const { container } = render(
+        <Root>
+          <SubagentThreadPanel
+            selection={{
+              ...selection,
+              subagentType: 'self',
+              subagentIdentity:
+                source === 'selection'
+                  ? { subagentKind: 'graph', subagentAgentId: 'graph:self' }
+                  : undefined,
+            }}
+          />
+        </Root>,
+      );
+      expect(screen.getByRole('heading', { name: 'self' })).toBeInTheDocument();
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-author', 'self');
+      expect(container.querySelector('header img[src="/historical-parent.png"]')).toBeNull();
+    },
+  );
+
+  it.each([false, true])(
+    'preserves indexed graph identity before query success (failed: %s)',
+    (failed) => {
+      const child: ParentSubagentSummary = {
+        threadId: 'child-thread',
+        parentMessageId: 'parent-message',
+        subagentType: 'self',
+        subagentKind: 'graph',
+        title: 'self',
+        origin: 'tool',
+        status: 'completed',
+        latestTaskId: 'task',
+        tasks: [{ taskId: 'task', status: 'completed' }],
+        tasksTruncated: false,
+      };
+      mockParentChildrenByThread.set(child.threadId, child);
+      queryClient.setQueryData<TMessage[]>(
+        [QueryKeys.messages, 'parent-conversation'],
+        [
+          {
+            messageId: 'parent-message',
+            parentMessageId: null,
+            conversationId: 'parent-conversation',
+            isCreatedByUser: false,
+            endpoint: EModelEndpoint.agents,
+            model: 'agent_deleted',
+            sender: 'Historical Parent',
+            iconURL: '/historical-parent.png',
+            text: '',
+          },
+        ],
+      );
+      mockUseSubagentThreadQuery.mockReturnValue({ isLoading: !failed, isError: failed });
+      const { container } = render(
+        <Root>
+          <SubagentThreadPanel selection={{ ...selection, subagentType: 'self' }} />
+        </Root>,
+      );
+      expect(screen.getByRole('heading', { name: 'self' })).toBeInTheDocument();
+      expect(container.querySelector('header img[src="/historical-parent.png"]')).toBeNull();
+    },
+  );
+
+  it('refreshes dispatch-lane attribution when switching streamed tool calls in one parent turn', async () => {
+    const first: TMessage = {
+      messageId: 'parent-message',
+      parentMessageId: null,
+      conversationId: 'parent-conversation',
+      isCreatedByUser: false,
+      text: '',
+      endpoint: EModelEndpoint.agents,
+      model: 'agent-2',
+      sender: 'Analyst Two',
+      content: [
+        {
+          type: ContentTypes.TOOL_CALL,
+          agentId: 'agent-2',
+          tool_call: { id: 'first-call', name: 'subagent', args: {} },
+        },
+      ],
+    };
+    queryClient.setQueryData([QueryKeys.messages, 'parent-conversation'], [first]);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { ...completedView, turns: completedTurns },
+    });
+    const { rerender } = render(
+      <Root>
+        <SubagentThreadPanel selection={{ ...selection, toolCallId: 'first-call' }} />
+      </Root>,
+    );
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-parent-author',
+      'Analyst Two',
+    );
+    await act(async () => {
+      queryClient.setQueryData(
+        [QueryKeys.messages, 'parent-conversation'],
+        [
+          {
+            ...first,
+            content: [
+              ...(first.content ?? []),
+              {
+                type: ContentTypes.TOOL_CALL,
+                agentId: 'agent-1',
+                tool_call: { id: 'second-call', name: 'subagent', args: {} },
+              },
+            ],
+          },
+        ],
+      );
+    });
+    rerender(
+      <Root>
+        <SubagentThreadPanel selection={{ ...selection, toolCallId: 'second-call' }} />
+      </Root>,
+    );
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-parent-author',
+      'Analyst One',
+    );
+    await act(async () => {
+      queryClient.setQueryData(
+        [QueryKeys.messages, 'parent-conversation'],
+        [{ ...first, sender: 'Changed snapshot', text: 'Later chunk' }],
+      );
+    });
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-parent-author',
+      'Analyst One',
+    );
+  });
+
+  it('switches repeated provider IDs between parallel dispatch occurrences', async () => {
+    const first: TMessage = {
+      messageId: 'parent-message',
+      parentMessageId: null,
+      conversationId: 'parent-conversation',
+      isCreatedByUser: false,
+      text: '',
+      endpoint: EModelEndpoint.agents,
+      model: 'agent-2',
+      sender: 'Analyst Two',
+      content: [
+        {
+          type: ContentTypes.TOOL_CALL,
+          agentId: 'agent-2',
+          tool_call: { id: 'repeat', name: 'subagent', args: {} },
+        },
+      ],
+    };
+    queryClient.setQueryData([QueryKeys.messages, 'parent-conversation'], [first]);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { ...completedView, turns: completedTurns },
+    });
+    const { rerender } = render(
+      <Root>
+        <SubagentThreadPanel
+          selection={{ ...selection, durable: undefined, toolCallId: 'repeat', partIndex: 0 }}
+        />
+      </Root>,
+    );
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-parent-author',
+      'Analyst Two',
+    );
+    await act(async () => {
+      queryClient.setQueryData(
+        [QueryKeys.messages, 'parent-conversation'],
+        [
+          {
+            ...first,
+            content: [
+              ...(first.content ?? []),
+              {
+                type: ContentTypes.TOOL_CALL,
+                agentId: 'agent-1',
+                tool_call: { id: 'repeat', name: 'subagent', args: {} },
+              },
+            ],
+          },
+        ],
+      );
+    });
+    rerender(
+      <Root>
+        <SubagentThreadPanel
+          selection={{ ...selection, durable: undefined, toolCallId: 'repeat', partIndex: 1 }}
+        />
+      </Root>,
+    );
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-parent-author',
+      'Analyst One',
+    );
+  });
+
+  it.each([false, true])(
+    'retains an indexed saved agent while durable details are unavailable (failed: %s)',
+    (failed) => {
+      const child: ParentSubagentSummary = {
+        threadId: 'child-thread',
+        parentMessageId: 'parent-message',
+        subagentType: 'agent-2',
+        subagentKind: 'agent',
+        agentId: 'agent-2',
+        title: 'Analyst Two',
+        origin: 'tool',
+        status: 'completed',
+        latestTaskId: 'task',
+        tasks: [{ taskId: 'task', status: 'completed' }],
+        tasksTruncated: false,
+      };
+      mockParentChildrenByThread.set(child.threadId, child);
+      mockUseSubagentThreadQuery.mockReturnValue({ isLoading: !failed, isError: failed });
+      render(
+        <Root>
+          <SubagentThreadPanel
+            selection={{ ...selection, subagentType: 'agent-2', subagentIdentity: undefined }}
+          />
+        </Root>,
+      );
+      expect(screen.getByRole('heading', { name: 'Analyst Two' })).toBeInTheDocument();
+    },
+  );
+
+  it.each(
+    ['Historical Reviewer', 'Subagent: Reviewer', 'self', 'agent_research_team'].flatMap((title) =>
+      [false, true].map((failed) => ({ title, failed })),
+    ),
+  )('retains an unavailable indexed agent title $title (failed: $failed)', ({ title, failed }) => {
+    const child: ParentSubagentSummary = {
+      threadId: 'child-thread',
+      parentMessageId: 'parent-message',
+      subagentType: 'agent_deleted',
+      subagentKind: 'agent',
+      agentId: 'agent_deleted',
+      title,
+      origin: 'tool',
+      status: 'completed',
+      latestTaskId: 'task',
+      tasks: [{ taskId: 'task', status: 'completed' }],
+      tasksTruncated: false,
+    };
+    mockParentChildrenByThread.set(child.threadId, child);
+    mockUseSubagentThreadQuery.mockReturnValue({ isLoading: !failed, isError: failed });
+    const view = render(
+      <Root>
+        <SubagentThreadPanel
+          selection={{ ...selection, subagentType: 'agent_deleted', subagentIdentity: undefined }}
+        />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: title })).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-author', title);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { ...completedView, agentId: 'agent_deleted', title },
+    });
+    view.rerender(
+      <Root>
+        <SubagentThreadPanel
+          selection={{ ...selection, subagentType: 'agent_deleted', subagentIdentity: undefined }}
+        />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: title })).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toHaveAttribute(
+      'placeholder',
+      `com_endpoint_message_new: ${title}`,
+    );
+  });
+
+  it('preserves a literal graph display title beginning with Subagent:', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        ...completedView,
+        agentId: undefined,
+        subagentKind: 'graph',
+        subagentType: 'Subagent: research',
+        title: 'Subagent: research',
+        turns: completedTurns,
+      },
+    });
+    render(
+      <Root>
+        <SubagentThreadPanel selection={{ ...selection, subagentType: 'Subagent: research' }} />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: 'Subagent: research' })).toBeInTheDocument();
+  });
+
+  it.each(['self', 'researcher'])(
+    'resolves a restored %s dispatch by thread handle rather than its placeholder index',
+    (type) => {
+      const handle = (threadId: string) =>
+        JSON.stringify({
+          background_task_id: 'task',
+          subagent_thread_id: threadId,
+          tool: 'subagent',
+          subagent_type: type,
+          status: 'running',
+          message: 'Poll using background_task_id task.',
+        });
+      const dispatch: TMessage = {
+        messageId: 'parent-message',
+        parentMessageId: null,
+        conversationId: 'parent-conversation',
+        isCreatedByUser: false,
+        text: '',
+        endpoint: EModelEndpoint.agents,
+        model: 'agent-2',
+        sender: 'Analyst Two',
+        content: [
+          {
+            type: ContentTypes.TOOL_CALL,
+            agentId: 'agent-2',
+            tool_call: {
+              id: 'repeat',
+              name: 'subagent',
+              args: { run_in_background: true },
+              output: handle('first-child'),
+            },
+          },
+          {
+            type: ContentTypes.TOOL_CALL,
+            agentId: 'agent-1',
+            tool_call: {
+              id: 'repeat',
+              name: 'subagent',
+              args: { run_in_background: true },
+              output: handle('child-thread'),
+            },
+          },
+        ],
+      };
+      queryClient.setQueryData([QueryKeys.messages, 'parent-conversation'], [dispatch]);
+      mockUseSubagentThreadQuery.mockReturnValue({
+        isLoading: false,
+        isError: false,
+        data: { ...completedView, subagentType: type, agentId: 'agent-1', turns: completedTurns },
+      });
+      render(
+        <Root>
+          <SubagentThreadPanel
+            selection={{ ...selection, subagentType: type, toolCallId: 'repeat', partIndex: 0 }}
+          />
+        </Root>,
+      );
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+        'data-parent-author',
+        'Analyst One',
+      );
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+        'data-author',
+        'Analyst One',
+      );
+    },
+  );
+
+  it('attributes restored parallel-lane self turns to the validated spawning agent', () => {
+    queryClient.setQueryData<TMessage[]>(
+      [QueryKeys.messages, 'parent-conversation'],
+      [
+        {
+          messageId: 'parent-message',
+          parentMessageId: null,
+          conversationId: 'parent-conversation',
+          isCreatedByUser: false,
+          text: '',
+          endpoint: EModelEndpoint.agents,
+          model: 'agent-2',
+          sender: 'Analyst Two',
+        },
+      ],
+    );
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: { ...completedView, subagentType: 'self', agentId: 'agent-1', turns: completedTurns },
+    });
+    const { container } = render(
+      <Root>
+        <SubagentThreadPanel selection={{ ...selection, subagentType: 'self' }} />
+      </Root>,
+    );
+    expect(screen.getByRole('heading', { name: 'Analyst One' })).toBeInTheDocument();
+    expect(container.querySelector('header img[src="/analyst.png"]')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-author',
+      'Analyst One',
+    );
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-parent-author',
+      'Analyst One',
+    );
+  });
+
+  it('resolves a missing historical parent after its reply arrives and retains that author', async () => {
+    queryClient.setQueryData<TMessage[]>([QueryKeys.messages, 'parent-conversation'], []);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        ...completedView,
+        agentId: 'agent_deleted',
+        subagentType: 'self',
+        turns: completedTurns,
+      },
+    });
+    const { container } = render(
+      <Root>
+        <SubagentThreadPanel selection={{ ...selection, subagentType: 'self' }} />
+      </Root>,
+    );
+    expect(
+      screen.getByRole('heading', { name: 'com_ui_subagent_parent_agent' }),
+    ).toBeInTheDocument();
+    const reply: TMessage = {
+      messageId: 'reply',
+      parentMessageId: 'parent-message',
+      conversationId: 'parent-conversation',
+      isCreatedByUser: false,
+      endpoint: EModelEndpoint.agents,
+      model: 'agent_deleted',
+      sender: 'Late Parent',
+      iconURL: '/late.png',
+      text: '',
+    };
+    await act(async () => {
+      queryClient.setQueryData([QueryKeys.messages, 'parent-conversation'], [reply]);
+    });
+    expect(screen.getByRole('heading', { name: 'Late Parent' })).toBeInTheDocument();
+    expect(container.querySelector('header img[src="/late.png"]')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+      'data-author',
+      'Late Parent',
+    );
+    await act(async () => {
+      queryClient.setQueryData(
+        [QueryKeys.messages, 'parent-conversation'],
+        [{ ...reply, sender: 'Changed snapshot', iconURL: '/changed.png', text: 'Next chunk' }],
+      );
+    });
+    expect(screen.getByRole('heading', { name: 'Late Parent' })).toBeInTheDocument();
+    expect(container.querySelector('header img[src="/late.png"]')).toBeInTheDocument();
+  });
+
+  it.each([true, false])(
+    'names an unavailable event actor by its projected label (indexed: %s)',
+    (indexed) => {
+      const child: ParentSubagentSummary = {
+        threadId: 'child-thread',
+        parentMessageId: 'parent-message',
+        subagentType: 'agent_deleted',
+        subagentKind: 'agent',
+        agentId: 'agent_deleted',
+        title: 'Agent actor: reviewer',
+        origin: 'event',
+        actorId: 'reviewer',
+        status: 'completed',
+        latestTaskId: 'task',
+        tasks: [{ taskId: 'task', status: 'completed' }],
+        tasksTruncated: false,
+      };
+      if (indexed) {
+        mockParentChildrenByMessage = new Map([['parent-message', [child]]]);
+        mockParentChildrenByThread = new Map([[child.threadId, child]]);
+      }
+      mockUseSubagentThreadQuery.mockReturnValue({
+        isLoading: false,
+        isError: false,
+        data: {
+          ...completedView,
+          agentId: 'agent_deleted',
+          title: child.title,
+          turns: completedTurns,
+        },
+      });
+      render(
+        <Root>
+          <SubagentThreadPanel
+            selection={{
+              ...selection,
+              event: { actorId: 'reviewer', progressKey: 'event-task:child-thread:task' },
+            }}
+          />
+        </Root>,
+      );
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute(
+        'data-author',
+        'reviewer',
+      );
+      expect(screen.getByRole('heading', { name: 'reviewer' })).toBeInTheDocument();
+      expect(screen.queryByText('Agent actor: reviewer')).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([undefined, { subagentKind: 'graph' as const, subagentAgentId: 'graph:agent-1' }])(
+    'does not resolve graph or legacy panel types as saved agents',
+    (subagentIdentity) => {
+      mockUseSubagentThreadQuery.mockReturnValue({ isLoading: false, isError: false });
+      render(
+        <Root>
+          <SubagentThreadPanel
+            selection={{
+              ...selection,
+              durable: undefined,
+              subagentType: 'agent-1',
+              subagentIdentity,
+            }}
+          />
+        </Root>,
+      );
+      /** A non-agent type is a readable name of its own, not an agent to look up. */
+      expect(screen.getByRole('heading', { name: 'agent-1' })).toBeInTheDocument();
+      expect(document.querySelector('img[src="/analyst.png"]')).toBeNull();
+    },
+  );
+
+  it('focuses the panel when the same task is explicitly reopened', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    const openTaskLabel = 'Open task';
+    const OpenPanel = () => {
+      const open = useOpenSubagentPanel();
+      return (
+        <button type="button" onClick={() => open?.(selection)}>
+          {openTaskLabel}
+        </button>
+      );
+    };
+    render(
+      <Root>
+        <input aria-label="Main chat draft" />
+        <OpenPanel />
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+    screen.getByLabelText('Main chat draft').focus();
+    fireEvent.click(screen.getByRole('button', { name: 'Open task' }));
+    expect(screen.getByRole('region', { name: 'com_ui_subagent_thread_panel' })).toHaveFocus();
+  });
+
+  it.each(['same', 'different'] as const)(
+    'returns focus to the latest opener after explicitly opening the %s task',
+    async (target) => {
+      mockUseSubagentThreadQuery.mockReturnValue({
+        data: completedView,
+        isLoading: false,
+        isError: false,
+        isReadinessPending: false,
+      });
+      const firstOpener = document.createElement('button');
+      const latestOpener = document.createElement('button');
+      firstOpener.id = 'first-opener';
+      latestOpener.id = 'latest-opener';
+      document.body.append(firstOpener, latestOpener);
+      firstOpener.focus();
+      const nextSelection: ActiveSubagentPanel =
+        target === 'same'
+          ? selection
+          : {
+              ...selection,
+              parentMessageId: 'unloaded-message',
+              toolCallId: 'other-call',
+              durable: { threadId: 'other-thread', taskId: 'other-task' },
+            };
+      const openTaskLabel = 'Open task';
+      const PanelHost = () => {
+        const selected = useAtomValue(activeSubagentPanel);
+        const open = useOpenSubagentPanel();
+        return (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                latestOpener.focus();
+                open?.(nextSelection);
+              }}
+            >
+              {openTaskLabel}
+            </button>
+            {selected != null && <SubagentThreadPanel selection={selected} />}
+          </>
+        );
+      };
+      try {
+        render(
+          <Root seed={(store) => store.set(activeSubagentPanel, selection)}>
+            <PanelHost />
+          </Root>,
+        );
+        const panel = screen.getByRole('region', { name: 'com_ui_subagent_thread_panel' });
+        expect(panel).toHaveFocus();
+        fireEvent.click(screen.getByRole('button', { name: openTaskLabel }));
+        expect(screen.getByRole('region', { name: 'com_ui_subagent_thread_panel' })).toBe(panel);
+        expect(panel).toHaveFocus();
+        fireEvent.click(screen.getByRole('button', { name: 'com_ui_close' }));
+        await waitFor(() => expect(latestOpener).toHaveFocus());
+        expect(firstOpener).not.toHaveFocus();
+      } finally {
+        firstOpener.remove();
+        latestOpener.remove();
+      }
+    },
+  );
+
+  describe.each([false, true])('focus return with mobile = %s', (mobile) => {
+    it.each([
+      'available',
+      'hidden',
+      'inert',
+      'aria-hidden',
+      'aria-disabled',
+      'disabled',
+      'removed',
+    ])(
+      'prefers the explicit opener when it is %s, otherwise falls back to the message card',
+      async (openerState) => {
+        mockIsMobile = mobile;
+        mockUseSubagentThreadQuery.mockReturnValue({
+          data: completedView,
+          isLoading: false,
+          isError: false,
+          isReadinessPending: false,
+        });
+        const disclosure = document.createElement('button');
+        const messageCard = document.createElement('button');
+        disclosure.id = 'popup-opener';
+        disclosure.dataset.testid = 'header-background-tasks-button';
+        messageCard.id = 'loaded-message-card';
+        messageCard.dataset.subagentToolCall = selection.toolCallId;
+        messageCard.dataset.subagentParentMessage = selection.parentMessageId;
+        messageCard.dataset.subagentPartIndex = String(selection.partIndex);
+        document.body.append(disclosure, messageCard);
+        disclosure.focus();
+        const PanelHost = () => {
+          const selected = useAtomValue(activeSubagentPanel);
+          return selected == null ? null : <SubagentThreadPanel selection={selected} />;
+        };
+        try {
+          render(
+            <Root seed={(store) => store.set(activeSubagentPanel, selection)}>
+              <PanelHost />
+            </Root>,
+          );
+          if (openerState === 'removed') disclosure.remove();
+          else if (openerState === 'disabled') disclosure.disabled = true;
+          else if (openerState !== 'available') {
+            disclosure.setAttribute(openerState, openerState.startsWith('aria-') ? 'true' : '');
+          }
+          fireEvent.click(screen.getByRole('button', { name: 'com_ui_close' }));
+          const destination = openerState === 'available' ? disclosure : messageCard;
+          await waitFor(() => expect(destination).toHaveFocus());
+        } finally {
+          disclosure.remove();
+          messageCard.remove();
+        }
+      },
+    );
+  });
+
+  it('does not steal main-chat focus when the selected task advances', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    const tree = (taskId: string) => (
+      <Root>
+        <input aria-label="Main chat draft" />
+        <SubagentThreadPanel
+          selection={{ ...selection, durable: { threadId: 'child-thread', taskId } }}
+        />
+      </Root>
+    );
+    const view = render(tree('task'));
+    const composer = screen.getByLabelText('Main chat draft');
+    composer.focus();
+    view.rerender(tree('next-task'));
+    expect(composer).toHaveFocus();
+  });
+
+  it('only navigates to the parent chat when explicitly requested', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    render(
+      <Root>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+    expect(screen.getByRole('region', { name: 'com_ui_subagent_thread_panel' })).toHaveFocus();
+    expect(mockNavigate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_go_to_parent' }));
+    expect(mockNavigate).toHaveBeenCalledWith('/c/parent-conversation');
+  });
+
+  it('returns focus to the task disclosure when its originating call is not loaded', async () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    const disclosure = document.createElement('button');
+    disclosure.dataset.testid = 'header-background-tasks-button';
+    document.body.append(disclosure);
+    disclosure.focus();
+    try {
+      render(
+        <Root>
+          <SubagentThreadPanel selection={selection} />
+        </Root>,
+      );
+      expect(screen.getByRole('region', { name: 'com_ui_subagent_thread_panel' })).toHaveFocus();
+      fireEvent.click(screen.getByRole('button', { name: 'com_ui_close' }));
+      await waitFor(() => expect(disclosure).toHaveFocus());
+      expect(mockNavigateToConvo).not.toHaveBeenCalled();
+    } finally {
+      disclosure.remove();
+    }
+  });
+
+  it.each(['hidden', 'inert', 'aria-hidden', 'disabled'])(
+    'skips an originating trigger blocked by %s when returning focus',
+    async (blocked) => {
+      mockUseSubagentThreadQuery.mockReturnValue({
+        data: completedView,
+        isLoading: false,
+        isError: false,
+        isReadinessPending: false,
+      });
+      const disclosure = document.createElement('button');
+      const group = document.createElement('section');
+      const trigger = document.createElement('button');
+      trigger.dataset.subagentToolCall = 'tool-call';
+      trigger.dataset.subagentParentMessage = 'parent-message';
+      trigger.dataset.subagentPartIndex = '2';
+      if (blocked === 'disabled') trigger.disabled = true;
+      else group.setAttribute(blocked, blocked === 'aria-hidden' ? 'true' : '');
+      group.append(trigger);
+      document.body.append(disclosure, group);
+      disclosure.focus();
+      try {
+        render(
+          <Root>
+            <SubagentThreadPanel selection={selection} />
+          </Root>,
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'com_ui_close' }));
+        await waitFor(() => expect(disclosure).toHaveFocus());
+      } finally {
+        disclosure.remove();
+        group.remove();
+      }
+    },
+  );
+
   it('renders a bounded read-only activity timeline and closes its selection', async () => {
     mockUseSubagentThreadQuery.mockReturnValue({
       data: completedView,
@@ -338,12 +1583,12 @@ describe('SubagentThreadPanel', () => {
     });
     let active: ActiveSubagentPanel | null = selection;
     const Observer = () => {
-      active = useRecoilValue(activeSubagentPanel);
+      active = useAtomValue(activeSubagentPanel);
       return null;
     };
 
     const { container } = render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <button
           type="button"
           data-subagent-tool-call="tool-call"
@@ -352,7 +1597,7 @@ describe('SubagentThreadPanel', () => {
         />
         <Observer />
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(mockUseSubagentThreadQuery).toHaveBeenCalledWith(
@@ -362,7 +1607,7 @@ describe('SubagentThreadPanel', () => {
       { keepPreviousData: true },
     );
     expect(mockUseSubagentActivityStream).toHaveBeenCalledWith(selection, false);
-    expect(screen.getByText('Research child')).toBeInTheDocument();
+    expect(screen.getByText('Analyst One')).toBeInTheDocument();
     expect(screen.queryByText('com_ui_subagent_depth')).not.toBeInTheDocument();
     expect(screen.getByText('Investigate the release.')).toBeInTheDocument();
     expect(screen.getByText('The release is ready.')).toBeInTheDocument();
@@ -388,11 +1633,11 @@ describe('SubagentThreadPanel', () => {
     });
     let active: ActiveSubagentPanel | null = selection;
     const Observer = () => {
-      active = useRecoilValue(activeSubagentPanel);
+      active = useAtomValue(activeSubagentPanel);
       return null;
     };
     const { container } = render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <button
           type="button"
           data-subagent-tool-call="tool-call"
@@ -401,7 +1646,7 @@ describe('SubagentThreadPanel', () => {
         />
         <Observer />
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_close' }));
@@ -440,13 +1685,33 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
 
+    queryClient.setQueryData<TMessage[]>(
+      [QueryKeys.messages, 'parent-conversation'],
+      [
+        {
+          messageId: 'parent-message',
+          parentMessageId: null,
+          conversationId: 'parent-conversation',
+          isCreatedByUser: false,
+          endpoint: EModelEndpoint.agents,
+          model: 'agent-2',
+          sender: 'Analyst Two',
+          text: '',
+        } as unknown as TMessage,
+      ],
+    );
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    expect(screen.getByTestId('subagent-conversation')).toBeInTheDocument();
+    /** One name for the child everywhere it appears, and the dispatching agent
+     *  as the author of every briefing — never an id or a role. */
+    const conversation = screen.getByTestId('subagent-conversation');
+    expect(conversation).toHaveAttribute('data-author', 'Analyst One');
+    expect(conversation).toHaveAttribute('data-parent-author', 'Analyst Two');
+    expect(screen.getByRole('heading', { name: 'Analyst One' })).toBeInTheDocument();
     expect(screen.getAllByTestId('conversation-turn')).toHaveLength(2);
     expect(screen.getByText(/Initial request/)).toBeInTheDocument();
     expect(screen.getByText(/Follow-up request/)).toBeInTheDocument();
@@ -474,14 +1739,284 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getAllByTestId('conversation-turn')).toHaveLength(2);
     expect(screen.getByText('The release is ready.')).toBeInTheDocument();
     expect(screen.getByText(/A newer request/)).toBeInTheDocument();
+  });
+
+  /** The panel composer obeys the same "Press Enter to send" preference the
+   *  main chat form does: with it off, reaching for a line break must not steer
+   *  a live run. */
+  it('leaves a bare Enter alone when the reader turned Enter-to-send off', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'running', controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    mockEnterToSend = false;
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    const composer = screen.getByLabelText('com_ui_message_input');
+    /** Addressed by name, as main chat's composer addresses its agent. */
+    expect(composer).toHaveAttribute('placeholder', 'com_endpoint_message_new: Analyst One');
+    fireEvent.change(composer, { target: { value: 'Check the primary source.' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(mockControlMutate).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(composer, { key: 'Enter', metaKey: true });
+    expect(mockControlMutate).toHaveBeenCalledTimes(1);
+    expect(mockControlMutate.mock.calls[0][0].command.action).toBe('steer');
+  });
+
+  /** A delivery re-keys the query to its new task and the task view blanks for
+   *  the render or two that takes. Measured against the live panel, the
+   *  composer used to unmount and remount inside 10ms there — taking focus and
+   *  a half-typed steer with it. */
+  it('keeps the composer mounted while a delivery re-keys the task view', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'running', controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    /** A fresh element each time: React bails out of an update whose element is
+     *  the very same object, so a reused tree would assert nothing. */
+    const tree = () => (
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>
+    );
+    const { rerender } = render(tree());
+
+    const composer = screen.getByLabelText('com_ui_message_input');
+    fireEvent.change(composer, { target: { value: 'Half-typed steer.' } });
+
+    /** The new task's view has not landed: `isPreviousData` withholds the task
+     *  view precisely so task-scoped fields are not misattributed. */
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'running', controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isPreviousData: true,
+      isReadinessPending: false,
+    });
+    rerender(tree());
+
+    expect(screen.getByLabelText('com_ui_message_input')).toHaveValue('Half-typed steer.');
+    /** Present, but not submittable until the new task's own view arrives. */
+    expect(screen.getByRole('button', { name: 'com_ui_steer_send' })).toBeDisabled();
+  });
+
+  /** A task on its way to an executor is live: withdrawing the composer until
+   *  the first token lands is the swap this panel exists to avoid. But the
+   *  server can only address a task that has a durable input row — it answers
+   *  404 otherwise, which this panel reads as inaccessible and closes controls
+   *  for good — so the field stays and submission waits instead. */
+  it.each([
+    ['has its durable input row', completedView.messages, 1],
+    ['has not been written yet', [], 0],
+  ])('keeps the composer while a dispatched task %s', (_label, messages, invocations) => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'dispatched', messages, controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    const composer = screen.getByLabelText('com_ui_message_input');
+    expect(composer).toBeInTheDocument();
+    /** Stop is a command too: on an unaddressable task it would 404 and close
+     *  this task's controls for good, so the retained surface withholds it. It
+     *  occupies the send slot only while the field is empty. */
+    expect(screen.queryByRole('button', { name: 'com_ui_subagent_cancel_task' }) != null).toBe(
+      invocations === 1,
+    );
+
+    fireEvent.change(composer, { target: { value: 'Check the primary source.' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(mockControlMutate).toHaveBeenCalledTimes(invocations);
+  });
+
+  /** Every door onto a command answers to the same gate — including the inline
+   *  controls a touch reader gets instead of the hovercard. */
+  it('withholds the inline actions while a dispatched task is unaddressable', () => {
+    mockCoarsePointer = true;
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'dispatched', messages: [], controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Check the primary source.' },
+    });
+    const queue = screen.getByRole('button', { name: 'com_ui_queue' });
+    expect(queue).toBeDisabled();
+    fireEvent.click(queue);
+    expect(mockControlMutate).not.toHaveBeenCalled();
+  });
+
+  /** While the panel is a focus-trapped modal the portaled list sits outside
+   *  the `aside` the trap knows, so Tab never reaches it — the actions come
+   *  inside the panel instead, hover or no hover. */
+  it('keeps the actions inside the panel while it is a modal', () => {
+    mockIsMobile = true;
+    mockCoarsePointer = false;
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'running', controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Check the primary source.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_queue' }));
+
+    expect(mockControlMutate).toHaveBeenCalledTimes(1);
+    expect(mockControlMutate.mock.calls[0][0].command.action).toBe('queue');
+  });
+
+  /** Queue and interrupt keep the chords main chat gives them instead of
+   *  spelling themselves out beside the field. */
+  it.each([
+    ['queue', { key: 'Enter', ctrlKey: true }, 'queue'],
+    ['interrupt', { key: 'Enter', altKey: true }, 'interrupt'],
+    ['steer', { key: 'Enter' }, 'steer'],
+  ])('submits a %s from its chord', (_label, event, action) => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'running', controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    const composer = screen.getByLabelText('com_ui_message_input');
+    fireEvent.change(composer, { target: { value: 'Check the primary source.' } });
+    fireEvent.keyDown(composer, event);
+
+    expect(mockControlMutate).toHaveBeenCalledTimes(1);
+    expect(mockControlMutate.mock.calls[0][0].command.action).toBe(action);
+  });
+
+  /** A chord the composer refuses must leave nothing behind: the next pointer
+   *  click carries no event and therefore always means the default steer. */
+  it('does not let a refused chord decide a later pointer submission', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'running', controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    const composer = screen.getByLabelText('com_ui_message_input');
+    /** Refused: the field is empty, so the composer never submits it. */
+    fireEvent.keyDown(composer, { key: 'Enter', altKey: true });
+    expect(mockControlMutate).not.toHaveBeenCalled();
+
+    fireEvent.change(composer, { target: { value: 'Check the primary source.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer_send' }));
+
+    expect(mockControlMutate).toHaveBeenCalledTimes(1);
+    expect(mockControlMutate.mock.calls[0][0].command.action).toBe('steer');
+  });
+
+  /** Where there is no hover, the send control's action list cannot be opened —
+   *  a tap on that anchor submits — so those readers get the actions as
+   *  controls of their own instead. */
+  it('offers the alternate submissions inline when the pointer cannot hover', () => {
+    mockIsMobile = true;
+    mockCoarsePointer = true;
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'running', controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Check the primary source.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_queue' }));
+
+    expect(mockControlMutate).toHaveBeenCalledTimes(1);
+    expect(mockControlMutate.mock.calls[0][0].command.action).toBe('queue');
+  });
+
+  /** Queue and interrupt keep a pointer of their own — a touch reader, or one
+   *  whose shortcuts are off or rebound, still has to reach them. */
+  it.each([
+    ['com_ui_queue', 'queue'],
+    ['com_ui_subagent_interrupt', 'interrupt'],
+  ])('offers %s to a pointer', (label, action) => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status: 'running', controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Check the primary source.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: label }));
+
+    expect(mockControlMutate).toHaveBeenCalledTimes(1);
+    expect(mockControlMutate.mock.calls[0][0].command.action).toBe(action);
   });
 
   it('submits one command invocation, blocks duplicate clicks, and shows its receipt', async () => {
@@ -492,17 +2027,17 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.change(screen.getByLabelText('com_ui_subagent_control_message'), {
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
       target: { value: 'Check the primary source.' },
     });
-    const queue = screen.getByRole('button', { name: 'com_ui_queue' });
-    fireEvent.click(queue);
-    fireEvent.click(queue);
+    const composer = screen.getByLabelText('com_ui_message_input');
+    fireEvent.keyDown(composer, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(composer, { key: 'Enter', ctrlKey: true });
 
     expect(mockControlMutate).toHaveBeenCalledTimes(1);
     const [variables, callbacks] = mockControlMutate.mock.calls[0] as [
@@ -548,22 +2083,22 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.change(screen.getByLabelText('com_ui_subagent_control_message'), {
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
       target: { value: 'Use the primary source.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer_send' }));
     const firstCommand = mockControlMutate.mock.calls[0][0].command;
     act(() => {
       mockControlMutate.mock.calls[0][1].onError({ response: { status: 503 } });
     });
 
-    expect(screen.getByLabelText('com_ui_subagent_control_message')).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'com_ui_subagent_cancel_task' })).toBeDisabled();
+    expect(screen.getByLabelText('com_ui_message_input')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'com_ui_steer_send' })).toBeDisabled();
     expect(screen.getByTestId('shared-activity')).toHaveAttribute('data-can-withdraw', 'false');
 
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_retry' }));
@@ -580,23 +2115,23 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.change(screen.getByLabelText('com_ui_subagent_control_message'), {
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
       target: { value: 'Blocked guidance.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer_send' }));
     act(() => {
       mockControlMutate.mock.calls[0][1].onError({ response: { status: 400 } });
     });
 
     expect(screen.getByText('com_ui_subagent_control_reason_invalid_command')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'com_ui_retry' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('com_ui_subagent_control_message')).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'com_ui_subagent_cancel_task' })).toBeEnabled();
+    expect(screen.getByLabelText('com_ui_message_input')).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'com_ui_steer_send' })).toBeEnabled();
   });
 
   it('retains an ambiguous invocation across closing and reopening the panel', () => {
@@ -607,8 +2142,8 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     const PanelHost = () => {
-      const current = useRecoilValue(activeSubagentPanel);
-      const setCurrent = useSetRecoilState(activeSubagentPanel);
+      const current = useAtomValue(activeSubagentPanel);
+      const setCurrent = useSetAtom(activeSubagentPanel);
       return current == null ? (
         <button type="button" onClick={() => setCurrent(selection)}>
           {selection.subagentType}
@@ -618,15 +2153,18 @@ describe('SubagentThreadPanel', () => {
       );
     };
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <PanelHost />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.change(screen.getByLabelText('com_ui_subagent_control_message'), {
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
       target: { value: 'Use the primary source.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_queue' }));
+    fireEvent.keyDown(screen.getByLabelText('com_ui_message_input'), {
+      key: 'Enter',
+      ctrlKey: true,
+    });
     const firstCommand = mockControlMutate.mock.calls[0][0].command;
     act(() => {
       mockControlMutate.mock.calls[0][1].onError({ response: { status: 503 } });
@@ -647,15 +2185,18 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     const first = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.change(screen.getByLabelText('com_ui_subagent_control_message'), {
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
       target: { value: 'Keep the same invocation.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_queue' }));
+    fireEvent.keyDown(screen.getByLabelText('com_ui_message_input'), {
+      key: 'Enter',
+      ctrlKey: true,
+    });
     const firstCommand = mockControlMutate.mock.calls[0][0].command;
     act(() => {
       mockControlMutate.mock.calls[0][1].onError({ response: { status: 503 } });
@@ -663,9 +2204,9 @@ describe('SubagentThreadPanel', () => {
     first.unmount();
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
     expect(screen.getByRole('button', { name: 'com_ui_retry' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_retry' }));
@@ -680,8 +2221,8 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     const PanelHost = () => {
-      const current = useRecoilValue(activeSubagentPanel);
-      const setCurrent = useSetRecoilState(activeSubagentPanel);
+      const current = useAtomValue(activeSubagentPanel);
+      const setCurrent = useSetAtom(activeSubagentPanel);
       return current == null ? (
         <button type="button" onClick={() => setCurrent(selection)}>
           {selection.subagentType}
@@ -691,15 +2232,18 @@ describe('SubagentThreadPanel', () => {
       );
     };
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <PanelHost />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.change(screen.getByLabelText('com_ui_subagent_control_message'), {
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
       target: { value: 'Retry after closing.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_queue' }));
+    fireEvent.keyDown(screen.getByLabelText('com_ui_message_input'), {
+      key: 'Enter',
+      ctrlKey: true,
+    });
     const firstCommand = mockControlMutate.mock.calls[0][0].command;
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_close' }));
     act(() => {
@@ -720,15 +2264,15 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     const { rerender } = render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.change(screen.getByLabelText('com_ui_subagent_control_message'), {
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
       target: { value: 'Use the primary source.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer_send' }));
     act(() => {
       mockControlMutate.mock.calls[0][1].onError({ response: { status: 503 } });
     });
@@ -740,16 +2284,21 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     rerender(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(
       screen.getByText('com_ui_subagent_control_reason_owner_unavailable'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'com_ui_retry' })).toBeInTheDocument();
-    expect(screen.queryByLabelText('com_ui_subagent_control_message')).not.toBeInTheDocument();
+    /** The settled child leaves the composer standing — Enter continues the
+     *  thread from here — but nothing in it still addresses the finished run. */
+    expect(screen.queryByRole('button', { name: 'com_ui_steer_send' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'com_ui_subagent_cancel_task' }),
+    ).not.toBeInTheDocument();
   });
 
   it('preserves drafted guidance when withdrawing an accepted control', () => {
@@ -773,12 +2322,12 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    const composer = screen.getByLabelText('com_ui_subagent_control_message');
+    const composer = screen.getByLabelText('com_ui_message_input');
     fireEvent.change(composer, { target: { value: 'Keep this draft.' } });
     fireEvent.click(screen.getByTestId('withdraw-control'));
     const command = mockControlMutate.mock.calls[0][0].command;
@@ -806,15 +2355,15 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     const { rerender } = render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.change(screen.getByLabelText('com_ui_subagent_control_message'), {
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
       target: { value: 'Use the primary source.' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_steer_send' }));
     const command = mockControlMutate.mock.calls[0][0].command;
     act(() => {
       mockControlMutate.mock.calls[0][1].onError({ response: { status: 503 } });
@@ -841,14 +2390,14 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     rerender(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByText('applied')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'com_ui_retry' })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('com_ui_subagent_control_message')).toHaveValue('');
+    expect(screen.getByLabelText('com_ui_message_input')).toHaveValue('');
     expect(
       screen.queryByText('com_ui_subagent_control_reason_owner_unavailable'),
     ).not.toBeInTheDocument();
@@ -863,9 +2412,9 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_cancel_task' }));
@@ -882,7 +2431,7 @@ describe('SubagentThreadPanel', () => {
       });
     });
 
-    expect(screen.queryByLabelText('com_ui_subagent_control_message')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('com_ui_message_input')).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'com_ui_subagent_cancel_task' }),
     ).not.toBeInTheDocument();
@@ -897,9 +2446,9 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_cancel_task' }));
@@ -911,7 +2460,7 @@ describe('SubagentThreadPanel', () => {
       screen.getByText('com_ui_subagent_control_reason_task_inaccessible'),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'com_ui_retry' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('com_ui_subagent_control_message')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('com_ui_message_input')).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: 'com_ui_subagent_cancel_task' }),
     ).not.toBeInTheDocument();
@@ -947,15 +2496,15 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByText('applied')).toBeInTheDocument();
     expect(screen.getByText('rejected')).toBeInTheDocument();
     expect(screen.getByTestId('shared-activity')).toHaveAttribute('data-status', 'running');
-    expect(screen.queryByLabelText('com_ui_subagent_control_message')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('com_ui_message_input')).not.toBeInTheDocument();
     expect(screen.getByTestId('shared-activity')).toHaveAttribute('data-can-withdraw', 'false');
   });
 
@@ -968,12 +2517,16 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, selection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    expect(screen.queryByLabelText('com_ui_subagent_control_message')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'com_ui_steer_send' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'com_ui_queue' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'com_ui_subagent_cancel_task' }),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId('shared-activity')).toHaveAttribute('data-can-withdraw', 'false');
   });
 
@@ -1000,15 +2553,134 @@ describe('SubagentThreadPanel', () => {
     };
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={foreground} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByText('Review this change.')).toBeInTheDocument();
     expect(screen.getByText('Review complete.')).toBeInTheDocument();
     expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-state', 'ready');
-    expect(screen.queryByRole('button', { name: 'com_ui_continue_chat' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'com_ui_subagent_continue_new_chat' }),
+    ).not.toBeInTheDocument();
+  });
+
+  describe('a foreground call the server sent as a preview', () => {
+    const previewed: ActiveSubagentPanel = {
+      host: 'conversation',
+      parentConversationId: 'parent-conversation',
+      parentMessageId: 'parent-message',
+      toolCallId: 'foreground-call',
+      partIndex: 3,
+      subagentType: 'researcher',
+      prompt: 'Review this change.',
+      legacyOutput: 'Shortened final ans…',
+      contentPreview: { revision: 'rev-1', stepId: 'step-9', agentId: 'agent-2' },
+      initialProgress: 1,
+      isSubmitting: false,
+    };
+
+    beforeEach(() => {
+      mockUseSubagentThreadQuery.mockReturnValue({
+        data: undefined,
+        isLoading: false,
+        isError: false,
+        isReadinessPending: false,
+      });
+    });
+
+    afterEach(() => {
+      mockUseToolCallPartQuery.mockImplementation(() => ({ data: undefined, isError: false }));
+    });
+
+    it('loads the stored part and never shows the shortened output as the activity', () => {
+      render(
+        <Root>
+          <SubagentThreadPanel selection={previewed} />
+        </Root>,
+      );
+
+      expect(mockUseToolCallPartQuery).toHaveBeenCalledWith(
+        {
+          conversationId: 'parent-conversation',
+          messageId: 'parent-message',
+          partIndex: 3,
+          toolCallId: 'foreground-call',
+          stepId: 'step-9',
+          agentId: 'agent-2',
+        },
+        { enabled: true },
+        'rev-1',
+      );
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-state', 'loading');
+      expect(screen.queryByText('Shortened final ans…')).not.toBeInTheDocument();
+    });
+
+    it('renders the stored transcript once it arrives', () => {
+      mockUseToolCallPartQuery.mockImplementation(() => ({
+        data: {
+          conversationId: 'parent-conversation',
+          messageId: 'parent-message',
+          partIndex: 3,
+          tool_call: {
+            id: 'foreground-call',
+            name: 'subagent',
+            args: '{"prompt":"Review this change, including the migration and its rollback."}',
+            output: 'Full final answer.',
+            subagent_content: [{ type: 'text', text: 'Stored review transcript.' }],
+          },
+        },
+        isError: false,
+      }));
+
+      render(
+        <Root>
+          <SubagentThreadPanel selection={previewed} />
+        </Root>,
+      );
+
+      expect(screen.getByText('Stored review transcript.')).toBeInTheDocument();
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-state', 'ready');
+      expect(
+        screen.getByText('Review this change, including the migration and its rollback.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Review this change.')).not.toBeInTheDocument();
+    });
+
+    it('reports a failed load with a retry instead of rendering the preview', () => {
+      const refetch = jest.fn().mockResolvedValue(undefined);
+      mockUseToolCallPartQuery.mockImplementation(() => ({
+        data: undefined,
+        isError: true,
+        refetch,
+      }));
+
+      render(
+        <Root>
+          <SubagentThreadPanel selection={previewed} />
+        </Root>,
+      );
+
+      expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-state', 'error');
+      expect(screen.queryByText('Shortened final ans…')).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('com_ui_tool_content_error');
+      fireEvent.click(screen.getByRole('button', { name: 'com_ui_retry' }));
+      expect(refetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads nothing for a call that arrived in full', () => {
+      render(
+        <Root>
+          <SubagentThreadPanel selection={{ ...previewed, contentPreview: undefined }} />
+        </Root>,
+      );
+      expect(mockUseToolCallPartQuery).toHaveBeenCalledWith(
+        expect.anything(),
+        { enabled: false },
+        undefined,
+      );
+    });
   });
 
   it('continues a completed durable agent task as an ordinary conversation snapshot', () => {
@@ -1020,12 +2692,17 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_continue_chat' }));
+    /** The settled thread keeps ONE composer: Enter continues from it, and what
+     *  the reader typed rides along instead of being discarded with the panel. */
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Take this further.' },
+    });
+    fireEvent.keyDown(screen.getByLabelText('com_ui_message_input'), { key: 'Enter' });
     expect(mockForkMutate).toHaveBeenCalledWith(
       {
         conversationId: 'child-thread',
@@ -1037,8 +2714,280 @@ describe('SubagentThreadPanel', () => {
 
     const mutationOptions = mockForkMutate.mock.calls[0][1];
     const conversation = { conversationId: 'continued-chat', agent_id: 'agent-1' };
+    /** Typed AFTER the request went out: the fork lands a round trip later and
+     *  the composer stays live for it, so the newer words are the ones that
+     *  travel. */
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Take this further, starting from the endgame.' },
+    });
     act(() => mutationOptions.onSuccess({ conversation, messages: [] }));
     expect(mockNavigateToConvo).toHaveBeenCalledWith(conversation);
+    /** In memory, never in the composer draft store: an unsent draft must not
+     *  be written to storage a reader may have asked not to use. */
+    expect(mockHandOffComposerText).toHaveBeenCalledWith(
+      'continued-chat',
+      'Take this further, starting from the endgame.',
+    );
+    expect(getDraft('continued-chat')).toBe('');
+  });
+
+  /** The composer is shared across selections, so a continuation that lands
+   *  after the reader has moved on must hand over the words IT was sent with,
+   *  and must not take the words now in front of them. */
+  it('binds the continuation draft to the selection that asked for it', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    const { rerender } = render(
+      <Root>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Keep going on the first task.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_continue_new_chat' }));
+
+    /** A different selection owns the composer now — same child thread, but the
+     *  panel is showing it for another parent, so its control identity (and its
+     *  draft) is not the one the fork was sent from. */
+    const laterSelection = { ...selection, parentConversationId: 'other-parent-conversation' };
+    rerender(
+      <Root>
+        <SubagentThreadPanel selection={laterSelection} />
+      </Root>,
+    );
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'A different question entirely.' },
+    });
+
+    const conversation = { conversationId: 'continued-chat', agent_id: 'agent-1' };
+    act(() => mockForkMutate.mock.calls[0][1].onSuccess({ conversation, messages: [] }));
+
+    expect(mockHandOffComposerText).toHaveBeenCalledWith(
+      'continued-chat',
+      'Keep going on the first task.',
+    );
+    expect(screen.getByLabelText('com_ui_message_input')).toHaveValue(
+      'A different question entirely.',
+    );
+  });
+
+  /** The cap belongs to the bounded control command, not to ordinary chat text
+   *  bound for a composer that caps nothing. */
+  it.each([
+    ['a live run composes a bounded control command', 'running' as const, 4096],
+    ['a settled run composes an ordinary continuation', 'completed' as const, null],
+  ])('caps the field only while %s', (_label, status, expected) => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, status, controlReceipts: [] },
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, selection)}>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    const composer = screen.getByLabelText('com_ui_message_input');
+    expect(composer.getAttribute('maxlength')).toBe(expected == null ? null : String(expected));
+  });
+
+  /** The panel holds the draft that travels with a continuation, so nothing may
+   *  swap the composer for another actor's while that request is out. */
+  it('freezes the actor picker while a continuation is in flight', () => {
+    const first: ParentSubagentSummary = {
+      threadId: 'child-thread',
+      parentMessageId: 'parent-message',
+      subagentType: 'agent-1',
+      subagentKind: 'agent',
+      agentId: 'agent-1',
+      title: 'First actor',
+      origin: 'event',
+      actorId: 'actor-1',
+      status: 'completed',
+      latestTaskId: 'task',
+      tasks: [{ taskId: 'task', status: 'completed' }],
+      tasksTruncated: false,
+    };
+    const second: ParentSubagentSummary = {
+      ...first,
+      threadId: 'child-thread-2',
+      subagentType: 'agent-2',
+      agentId: 'agent-2',
+      title: 'Second actor',
+      actorId: 'actor-2',
+      latestTaskId: 'task-2',
+      tasks: [{ taskId: 'task-2', status: 'completed' }],
+    };
+    mockParentChildrenByMessage = new Map([['parent-message', [first, second]]]);
+    mockParentChildrenByThread = new Map([
+      [first.threadId, first],
+      [second.threadId, second],
+    ]);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    const eventSelection: ActiveSubagentPanel = {
+      ...selection,
+      event: { actorId: 'actor-1', progressKey: 'event-task:child-thread:task' },
+    };
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, eventSelection)}>
+        <SubagentThreadPanel selection={eventSelection} />
+      </Root>,
+    );
+
+    expect(screen.getByRole('combobox', { name: 'com_ui_subagent_actor' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_continue_new_chat' }));
+    expect(screen.getByRole('combobox', { name: 'com_ui_subagent_actor' })).toBeDisabled();
+
+    act(() => mockForkMutate.mock.calls[0][1].onError());
+    expect(screen.getByRole('combobox', { name: 'com_ui_subagent_actor' })).toBeEnabled();
+  });
+
+  /** An advance changes the control identity, which empties the composer, so
+   *  unsent words hold the selection wherever they came from: typed and not yet
+   *  sent, or left behind by a continuation that failed and is waiting to be
+   *  retried. The hold lifts once the draft is gone. */
+  it.each([
+    ['a draft that was never submitted', false],
+    ['a draft left behind by a failed continuation', true],
+  ])('holds the selection for %s', (_label, submitAndFail) => {
+    const actor: ParentSubagentSummary = {
+      threadId: 'child-thread',
+      parentMessageId: 'parent-message',
+      subagentType: 'agent-1',
+      subagentKind: 'agent',
+      agentId: 'agent-1',
+      title: 'First actor',
+      origin: 'event',
+      actorId: 'actor-1',
+      status: 'completed',
+      latestTaskId: 'task',
+      tasks: [{ taskId: 'task', status: 'completed' }],
+      tasksTruncated: false,
+    };
+    const withNewerTask: ParentSubagentSummary = {
+      ...actor,
+      latestTaskId: 'task-newer',
+      tasks: [
+        { taskId: 'task-newer', status: 'completed' },
+        { taskId: 'task', status: 'completed' },
+      ],
+    };
+    mockParentChildrenByMessage = new Map([['parent-message', [actor]]]);
+    mockParentChildrenByThread = new Map([[actor.threadId, actor]]);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    let active: ActiveSubagentPanel | null = null;
+    const Observer = () => {
+      active = useAtomValue(activeSubagentPanel);
+      return null;
+    };
+    const eventSelection: ActiveSubagentPanel = {
+      ...selection,
+      event: { actorId: 'actor-1', progressKey: 'event-task:child-thread:task' },
+    };
+
+    /** A fresh element each time: React bails out of an update whose element is
+     *  the very same object, so a reused tree would assert nothing. */
+    const tree = () => (
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, eventSelection)}>
+        <Observer />
+        <SubagentThreadPanel selection={eventSelection} />
+      </Root>
+    );
+    const { rerender } = render(tree());
+
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Try that again.' },
+    });
+    if (submitAndFail) {
+      fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_continue_new_chat' }));
+    }
+
+    mockParentChildrenByThread = new Map([[actor.threadId, withNewerTask]]);
+    mockParentChildrenByMessage = new Map([['parent-message', [withNewerTask]]]);
+    rerender(tree());
+    if (submitAndFail) {
+      act(() => mockForkMutate.mock.calls[0][1].onError());
+    }
+    rerender(tree());
+
+    expect(screen.getByLabelText('com_ui_message_input')).toHaveValue('Try that again.');
+    expect((active as ActiveSubagentPanel | null)?.durable?.taskId).toBe('task');
+
+    /** Draft gone, nothing left to protect: the panel follows the actor again. */
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), { target: { value: '' } });
+    rerender(tree());
+    expect((active as ActiveSubagentPanel | null)?.durable?.taskId).toBe('task-newer');
+  });
+
+  /** Emptying the field after asking to continue is the reader withdrawing the
+   *  words, not leaving them behind — the destination must not reinstate what
+   *  they deleted. */
+  it('hands over nothing when the draft is cleared before the fork lands', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    render(
+      <Root>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'On second thought.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_continue_new_chat' }));
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), { target: { value: '' } });
+
+    const conversation = { conversationId: 'continued-chat', agent_id: 'agent-1' };
+    act(() => mockForkMutate.mock.calls[0][1].onSuccess({ conversation, messages: [] }));
+
+    expect(mockNavigateToConvo).toHaveBeenCalledWith(conversation);
+    expect(mockHandOffComposerText).not.toHaveBeenCalled();
+  });
+
+  it('continues with no draft when the reader asks for the chat without typing', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+
+    render(
+      <Root>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_continue_new_chat' }));
+    const mutationOptions = mockForkMutate.mock.calls[0][1];
+    const conversation = { conversationId: 'empty-continuation', agent_id: 'agent-1' };
+    act(() => mutationOptions.onSuccess({ conversation, messages: [] }));
+    expect(mockNavigateToConvo).toHaveBeenCalledWith(conversation);
+    expect(mockHandOffComposerText).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1054,12 +3003,14 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    expect(screen.queryByRole('button', { name: 'com_ui_continue_chat' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'com_ui_subagent_continue_new_chat' }),
+    ).not.toBeInTheDocument();
   });
 
   it('reports continuation failures without closing the child panel', () => {
@@ -1071,18 +3022,24 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_continue_chat' }));
-    mockForkMutate.mock.calls[0][1].onError();
+    fireEvent.change(screen.getByLabelText('com_ui_message_input'), {
+      target: { value: 'Carry this over.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_continue_new_chat' }));
+    act(() => mockForkMutate.mock.calls[0][1].onError());
     expect(mockShowToast).toHaveBeenCalledWith({
       message: 'com_ui_continue_chat_error',
       status: 'error',
     });
     expect(screen.getByRole('region')).toBeInTheDocument();
+    /** The panel stays open on this path and never took the words away, so the
+     *  reader can retry with them still in front of them. */
+    expect(screen.getByLabelText('com_ui_message_input')).toHaveValue('Carry this over.');
   });
 
   it('renders newer detached progress instead of a dispatch-time parent snapshot', () => {
@@ -1105,9 +3062,9 @@ describe('SubagentThreadPanel', () => {
     };
 
     render(
-      <RecoilRoot
-        initializeState={({ set }) =>
-          set(subagentProgressByToolCallId(progressKey), {
+      <Root
+        seed={(jotai) =>
+          jotai.set(subagentProgressByToolCallId(progressKey), {
             subagentRunId: 'child-run',
             subagentType: 'researcher',
             status: 'message_delta',
@@ -1119,7 +3076,7 @@ describe('SubagentThreadPanel', () => {
         }
       >
         <SubagentThreadPanel selection={detachedSelection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByText('Dispatch-time snapshot.latest detached text.')).toBeInTheDocument();
@@ -1133,20 +3090,20 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     const { rerender } = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={{ ...selection, durable: undefined }} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(mockApprovalProviderMounted).toHaveBeenCalledTimes(1);
     expect(mockApprovalProviderUnmounted).not.toHaveBeenCalled();
 
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel
           selection={{ ...selection, partIndex: selection.partIndex + 1, durable: undefined }}
         />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(mockApprovalProviderUnmounted).toHaveBeenCalledTimes(1);
@@ -1162,9 +3119,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-state', 'loading');
@@ -1181,9 +3138,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     const { rerender } = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
     expect(mockUseSubagentActivityStream).toHaveBeenLastCalledWith(selection, true);
 
@@ -1194,9 +3151,9 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(mockUseSubagentActivityStream).toHaveBeenLastCalledWith(selection, true);
@@ -1214,9 +3171,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(mockUseSubagentActivityStream).toHaveBeenLastCalledWith(selection, true);
@@ -1255,9 +3212,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={eventSelection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(mockUseSubagentThreadQuery).toHaveBeenCalledWith(
@@ -1282,9 +3239,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByTestId('subagent-conversation')).toHaveAttribute('data-state', 'error');
@@ -1300,9 +3257,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot
-        initializeState={({ set }) =>
-          set(
+      <Root
+        seed={(jotai) =>
+          jotai.set(
             subagentProgressByToolCallId(
               subagentProgressKey(
                 selection.parentMessageId,
@@ -1322,7 +3279,7 @@ describe('SubagentThreadPanel', () => {
         }
       >
         <SubagentThreadPanel selection={{ ...selection, runStepStatus: 'completed' }} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByText('Live child update.')).toBeInTheDocument();
@@ -1330,8 +3287,9 @@ describe('SubagentThreadPanel', () => {
     expect(screen.queryByTestId('shared-activity')).not.toBeInTheDocument();
   });
 
-  it('exposes the focus-trapped mobile overlay as a modal dialog', () => {
-    mockIsMobile = true;
+  it('exposes the scaled overlay as a modal above the fixed mobile breakpoint', () => {
+    mockViewportWidth = 800;
+    mockRemScale = 1.5;
     mockUseSubagentThreadQuery.mockReturnValue({
       data: completedView,
       isLoading: false,
@@ -1340,9 +3298,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
@@ -1401,15 +3359,15 @@ describe('SubagentThreadPanel', () => {
     };
     let active: ActiveSubagentPanel | null = eventSelection;
     const Observer = () => {
-      active = useRecoilValue(activeSubagentPanel);
+      active = useAtomValue(activeSubagentPanel);
       return null;
     };
 
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, eventSelection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, eventSelection)}>
         <Observer />
         <SubagentThreadPanel selection={eventSelection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.queryByRole('button', { name: 'com_ui_subagent_turn' })).not.toBeInTheDocument();
@@ -1441,6 +3399,78 @@ describe('SubagentThreadPanel', () => {
     expect(mockRefreshParentChildren).toHaveBeenCalled();
   });
 
+  /** The picker's popover renders inside the panel so the mobile focus trap can
+   *  see it. That same trap closes the panel on Escape, which would take the
+   *  composer's text with it — so an Escape aimed at the open picker has to
+   *  stop there. */
+  /** The picker's popover renders inside the panel so the mobile focus trap can
+   *  see it. That same trap closes the panel on Escape, which would take the
+   *  composer's text with it — so an Escape aimed at the OPEN picker has to stop
+   *  there, while an Escape anywhere else still closes the panel. */
+  it.each([
+    ['closes the panel when the actor picker is shut', false, true],
+    ['is left to the actor picker while it is open', true, false],
+  ])('Escape %s', (_label, openPicker, expectsClose) => {
+    const first: ParentSubagentSummary = {
+      threadId: 'child-thread',
+      parentMessageId: 'parent-message',
+      subagentType: 'agent-1',
+      subagentKind: 'agent',
+      agentId: 'agent-1',
+      title: 'First actor',
+      origin: 'event',
+      actorId: 'actor-1',
+      status: 'completed',
+      latestTaskId: 'task',
+      tasks: [{ taskId: 'task', status: 'completed' }],
+      tasksTruncated: false,
+    };
+    const second: ParentSubagentSummary = {
+      ...first,
+      threadId: 'child-thread-2',
+      subagentType: 'agent-2',
+      agentId: 'agent-2',
+      title: 'Second actor',
+      actorId: 'actor-2',
+      latestTaskId: 'task-2',
+      tasks: [{ taskId: 'task-2', status: 'completed' }],
+    };
+    mockParentChildrenByMessage = new Map([['parent-message', [first, second]]]);
+    mockParentChildrenByThread = new Map([
+      [first.threadId, first],
+      [second.threadId, second],
+    ]);
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: completedView,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    mockIsMobile = true;
+    let active: ActiveSubagentPanel | null = null;
+    const Observer = () => {
+      active = useAtomValue(activeSubagentPanel);
+      return null;
+    };
+    const eventSelection: ActiveSubagentPanel = {
+      ...selection,
+      event: { actorId: 'actor-1', progressKey: 'event-task:child-thread:task' },
+    };
+
+    render(
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, eventSelection)}>
+        <Observer />
+        <SubagentThreadPanel selection={eventSelection} />
+      </Root>,
+    );
+
+    const picker = screen.getByRole('combobox', { name: 'com_ui_subagent_actor' });
+    if (openPicker) fireEvent.click(picker);
+    fireEvent.keyDown(picker, { key: 'Escape' });
+
+    expect(active == null).toBe(expectsClose);
+  });
+
   it('keeps a single event actor in the compact header without a duplicate selector', () => {
     const eventChild: ParentSubagentSummary = {
       threadId: 'child-thread',
@@ -1466,14 +3496,14 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel
           selection={{
             ...selection,
             event: { actorId: 'actor-1', progressKey: 'event-task:child-thread:task' },
           }}
         />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getByRole('heading', { name: 'Analyst One' })).toBeInTheDocument();
@@ -1531,9 +3561,9 @@ describe('SubagentThreadPanel', () => {
         durable: { threadId: 'child-thread', taskId: selectedTaskId },
       };
       render(
-        <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, missingSelection)}>
+        <Root seed={(jotai) => jotai.set(activeSubagentPanel, missingSelection)}>
           <SubagentThreadPanel selection={missingSelection} />
-        </RecoilRoot>,
+        </Root>,
       );
 
       const turns = screen.getAllByTestId('conversation-turn');
@@ -1543,6 +3573,69 @@ describe('SubagentThreadPanel', () => {
       expect(turns[1 - synthesizedIndex]).toHaveTextContent('Durable window turn');
     },
   );
+
+  it.each(['latest window', 'empty window', 'selected trigger only'] as const)(
+    'carries the exact durable answer into a selected task outside the %s',
+    (window) => {
+      const outcome = {
+        messageId: 'task-old:assistant',
+        parentMessageId: 'task-old:user',
+        role: 'assistant' as const,
+        text: 'Durable historical answer.',
+      };
+      const turn = {
+        taskId: window === 'selected trigger only' ? 'task-old' : 'task-new',
+        trigger: { kind: 'parent_continuation' as const, summary: 'Window trigger' },
+        status: 'completed' as const,
+        activity: [],
+        activityTruncated: false,
+        messages: [],
+      };
+      mockUseSubagentThreadQuery.mockReturnValue({
+        data: {
+          ...completedView,
+          messages: [
+            outcome,
+            { ...outcome, messageId: 'another-task:assistant', text: 'Unrelated answer' },
+          ],
+          turns: window === 'empty window' ? [] : [turn],
+        },
+        isLoading: false,
+        isError: false,
+        isReadinessPending: false,
+      });
+      const selected: ActiveSubagentPanel = {
+        ...selection,
+        durable: { threadId: 'child-thread', taskId: 'task-old' },
+      };
+      render(
+        <Root>
+          <SubagentThreadPanel selection={selected} />
+        </Root>,
+      );
+      const outcomes = screen
+        .getAllByTestId('conversation-turn')
+        .map((row) => row.getAttribute('data-outcome'))
+        .filter(Boolean);
+      expect(outcomes).toEqual(['Durable historical answer.']);
+    },
+  );
+
+  it('does not attribute a retained previous-task response to the newly selected task', () => {
+    mockUseSubagentThreadQuery.mockReturnValue({
+      data: { ...completedView, turns: [] },
+      isPreviousData: true,
+      isLoading: false,
+      isError: false,
+      isReadinessPending: false,
+    });
+    render(
+      <Root>
+        <SubagentThreadPanel selection={selection} />
+      </Root>,
+    );
+    expect(screen.getByTestId('conversation-turn')).not.toHaveAttribute('data-outcome');
+  });
 
   it('loads an exact older turn projection only after the local disclosure is opened', async () => {
     const truncatedView: SubagentThreadView = {
@@ -1587,9 +3680,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(mockGetSubagentThread).not.toHaveBeenCalled();
@@ -1631,9 +3724,9 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'load-task-old' }));
@@ -1681,12 +3774,12 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     await waitFor(() => expect(screen.getAllByTestId('conversation-turn')).toHaveLength(2));
     expect(mockGetSubagentThread).toHaveBeenCalledWith(
       'parent-conversation',
@@ -1724,11 +3817,11 @@ describe('SubagentThreadPanel', () => {
     mockGetSubagentThread.mockReturnValueOnce(olderPage);
 
     const { rerender } = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
 
     mockUseSubagentThreadQuery.mockReturnValue({
       data: {
@@ -1758,9 +3851,9 @@ describe('SubagentThreadPanel', () => {
       isReadinessPending: false,
     });
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     await act(async () => {
@@ -1784,9 +3877,7 @@ describe('SubagentThreadPanel', () => {
 
     expect(screen.queryByText('Displaced result')).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }),
-      ).toBeEnabled(),
+      expect(screen.getByRole('button', { name: 'com_ui_load_more' })).toBeEnabled(),
     );
   });
 
@@ -1813,16 +3904,14 @@ describe('SubagentThreadPanel', () => {
     mockGetSubagentThread.mockRejectedValueOnce(new Error('history unavailable'));
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'com_ui_retry' })).toBeEnabled());
-    expect(
-      screen.queryByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'com_ui_load_more' })).not.toBeInTheDocument();
   });
 
   it('shows a compact inaccessible-history boundary when no recovery cursor exists', () => {
@@ -1847,17 +3936,15 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(
       screen.getByRole('status', { name: 'com_ui_subagent_thread_history_truncated' }),
     ).toHaveTextContent('•••');
-    expect(
-      screen.queryByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'com_ui_load_more' })).not.toBeInTheDocument();
   });
 
   it('preserves an unrecoverable boundary while loading later cursor pages', async () => {
@@ -1890,12 +3977,12 @@ describe('SubagentThreadPanel', () => {
       });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     await waitFor(() =>
       expect(mockGetSubagentThread).toHaveBeenLastCalledWith(
         'parent-conversation',
@@ -1904,7 +3991,7 @@ describe('SubagentThreadPanel', () => {
         'older:assistant',
       ),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     await waitFor(() =>
       expect(mockGetSubagentThread).toHaveBeenLastCalledWith(
         'parent-conversation',
@@ -1935,9 +4022,9 @@ describe('SubagentThreadPanel', () => {
     }));
 
     const { rerender } = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
     expect(
       screen.getByRole('status', { name: 'com_ui_subagent_thread_history_truncated' }),
@@ -1949,9 +4036,9 @@ describe('SubagentThreadPanel', () => {
       nextCursor: 'new-boundary:assistant',
     };
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     await waitFor(() =>
@@ -2015,20 +4102,20 @@ describe('SubagentThreadPanel', () => {
     };
 
     const { rerender } = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selectionA} />
-      </RecoilRoot>,
+      </Root>,
     );
     fireEvent.click(screen.getByRole('button', { name: 'load-task-a' }));
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selectionB} />
-      </RecoilRoot>,
+      </Root>,
     );
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selectionA} />
-      </RecoilRoot>,
+      </Root>,
     );
     await waitFor(() => expect(screen.getByRole('button', { name: 'load-task-a' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'load-task-a' }));
@@ -2104,27 +4191,25 @@ describe('SubagentThreadPanel', () => {
     };
 
     const { rerender } = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selectionA} />
-      </RecoilRoot>,
+      </Root>,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selectionB} />
-      </RecoilRoot>,
+      </Root>,
     );
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selectionA} />
-      </RecoilRoot>,
+      </Root>,
     );
     await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }),
-      ).toBeEnabled(),
+      expect(screen.getByRole('button', { name: 'com_ui_load_more' })).toBeEnabled(),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     await waitFor(() => expect(screen.getByText('Fresh older result')).toBeInTheDocument());
 
     await act(async () => {
@@ -2195,11 +4280,11 @@ describe('SubagentThreadPanel', () => {
       .mockReturnValueOnce(reconnectPage);
 
     const { rerender } = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     await waitFor(() => expect(screen.getAllByTestId('conversation-turn')).toHaveLength(3));
 
     latestView = {
@@ -2208,9 +4293,9 @@ describe('SubagentThreadPanel', () => {
       turns: [makeTurn('task-new', 'New result'), makeTurn('task-newer', 'Newest result')],
     };
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     await waitFor(() => expect(screen.getAllByTestId('conversation-turn')).toHaveLength(5));
@@ -2220,7 +4305,7 @@ describe('SubagentThreadPanel', () => {
     expect(screen.getByText('New result')).toBeInTheDocument();
     expect(screen.getByText('Newest result')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     await waitFor(() =>
       expect(mockGetSubagentThread).toHaveBeenLastCalledWith(
         'parent-conversation',
@@ -2237,13 +4322,13 @@ describe('SubagentThreadPanel', () => {
       turns: [makeTurn('task-final', 'Final live result')],
     };
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
     await waitFor(() => expect(screen.getAllByTestId('conversation-turn')).toHaveLength(7));
 
-    fireEvent.click(screen.getByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_load_more' }));
     await waitFor(() =>
       expect(mockGetSubagentThread).toHaveBeenLastCalledWith(
         'parent-conversation',
@@ -2259,9 +4344,9 @@ describe('SubagentThreadPanel', () => {
       turns: [makeTurn('task-ultimate', 'Ultimate live result')],
     };
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
     await waitFor(() => expect(screen.getByText('Ultimate live result')).toBeInTheDocument());
 
@@ -2291,9 +4376,7 @@ describe('SubagentThreadPanel', () => {
       expect.stringContaining('Final live result'),
       expect.stringContaining('Ultimate live result'),
     ]);
-    expect(
-      screen.queryByRole('button', { name: 'com_ui_subagent_load_earlier_activity' }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'com_ui_load_more' })).not.toBeInTheDocument();
   });
 
   it('does not accumulate displaced latest-window turns before history is requested', async () => {
@@ -2318,9 +4401,9 @@ describe('SubagentThreadPanel', () => {
     }));
 
     const { rerender } = render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
     expect(screen.getByText('Old result')).toBeInTheDocument();
 
@@ -2330,9 +4413,9 @@ describe('SubagentThreadPanel', () => {
       turns: [makeTurn('task', 'Current result'), makeTurn('new', 'New result')],
     };
     rerender(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={selection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     await waitFor(() => expect(screen.queryByText('Old result')).not.toBeInTheDocument());
@@ -2373,15 +4456,15 @@ describe('SubagentThreadPanel', () => {
     };
     let active: ActiveSubagentPanel | null = staleSelection;
     const Observer = () => {
-      active = useRecoilValue(activeSubagentPanel);
+      active = useAtomValue(activeSubagentPanel);
       return null;
     };
 
     render(
-      <RecoilRoot initializeState={({ set }) => set(activeSubagentPanel, staleSelection)}>
+      <Root seed={(jotai) => jotai.set(activeSubagentPanel, staleSelection)}>
         <Observer />
         <SubagentThreadPanel selection={staleSelection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     await waitFor(() =>
@@ -2424,9 +4507,9 @@ describe('SubagentThreadPanel', () => {
     };
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel selection={eventSelection} />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getAllByTestId('shared-activity')).toHaveLength(3);
@@ -2471,14 +4554,14 @@ describe('SubagentThreadPanel', () => {
     });
 
     render(
-      <RecoilRoot>
+      <Root>
         <SubagentThreadPanel
           selection={{
             ...selection,
             event: { actorId: 'actor-1', progressKey: 'event-task:child-thread:task' },
           }}
         />
-      </RecoilRoot>,
+      </Root>,
     );
 
     expect(screen.getAllByTestId('shared-activity')).toHaveLength(1);

@@ -1,17 +1,21 @@
 import { useCallback, useId, useMemo, useState } from 'react';
+import { useSetAtom } from 'jotai';
 import { Button, cn } from '@librechat/client';
 import { Bot, ChevronDown } from 'lucide-react';
-import { useRecoilValue, useResetRecoilState, useSetRecoilState } from 'recoil';
+import { getMessageRowWidthClass } from '@librechat/chat/components';
+import {
+  activeSubagentPanel,
+  isLiveSubagentStatus,
+  subagentStatusDotClass,
+  subagentStatusLabelKey,
+  eventSubagentSelection,
+} from '@librechat/chat/react';
 import type { ParentSubagentSummary } from 'librechat-data-provider';
-import { getMessageRowWidthClass } from '~/components/Chat/Messages/ui/MessageRow';
-import { subagentStatusDotClass, subagentStatusLabelKey } from './status';
+import { useChatSurface, useOpenSubagentPanel } from './surface';
 import { useParentSubagents } from './ParentSubagentsProvider';
-import { eventSubagentSelection } from './eventSelection';
-import { activeSubagentPanel } from '~/store/subagents';
 import { useAgentsMapContext } from '~/Providers';
 import { renderAgentAvatar } from '~/utils';
 import { useLocalize } from '~/hooks';
-import store from '~/store';
 
 const STATUS_COUNT_LABEL_KEYS = {
   dispatched: {
@@ -60,7 +64,7 @@ export default function EventSubagentActivityGroup({
         return true;
       });
   }, [byMessageId, parentMessageIds]);
-  const fullWidth = useRecoilValue(store.maximizeChatSpace);
+  const { maximizeChatSpace: fullWidth } = useChatSurface();
   const siblingParentMessageIds = useMemo(
     () => Array.from(new Set(parentMessageIds)),
     [parentMessageIds],
@@ -69,7 +73,7 @@ export default function EventSubagentActivityGroup({
   return (
     <div
       className={cn(
-        'mx-auto min-w-0 flex-1 px-4 transition-[max-width] duration-theme-normal motion-reduce:transition-none sm:px-0',
+        'duration-theme-normal mx-auto min-w-0 flex-1 px-4 transition-[max-width] motion-reduce:transition-none sm:px-0',
         getMessageRowWidthClass({ fullWidth, hasParallelContent }),
       )}
     >
@@ -94,9 +98,8 @@ function EventSubagentRows({
   const localize = useLocalize();
   const agentsMap = useAgentsMapContext();
   const { refresh } = useParentSubagents();
-  const setSelected = useSetRecoilState(activeSubagentPanel);
-  const setArtifactsVisible = useSetRecoilState(store.artifactsVisibility);
-  const resetCurrentArtifactId = useResetRecoilState(store.currentArtifactId);
+  const setSelected = useSetAtom(activeSubagentPanel);
+  const openPanel = useOpenSubagentPanel();
   const [expanded, setExpanded] = useState(false);
   const panelId = useId();
   const counts = useMemo(() => {
@@ -118,10 +121,8 @@ function EventSubagentRows({
   const openChild = useCallback(
     (child: ParentSubagentSummary) => {
       const selection = eventSubagentSelection(conversationId, child, siblingParentMessageIds);
-      if (selection == null) return;
-      resetCurrentArtifactId();
-      setArtifactsVisible(false);
-      setSelected(selection);
+      if (selection == null || openPanel == null) return;
+      openPanel(selection);
       void refresh().then((index) => {
         const fresh = index?.children.find((candidate) => candidate.threadId === child.threadId);
         if (fresh == null || fresh.latestTaskId === child.latestTaskId) return;
@@ -133,6 +134,7 @@ function EventSubagentRows({
         if (freshSelection != null) {
           setSelected((current) => {
             if (
+              current?.event?.pinnedTask === true ||
               current?.durable?.threadId !== selection.durable?.threadId ||
               current?.durable?.taskId !== selection.durable?.taskId
             ) {
@@ -143,14 +145,7 @@ function EventSubagentRows({
         }
       });
     },
-    [
-      conversationId,
-      refresh,
-      resetCurrentArtifactId,
-      setArtifactsVisible,
-      setSelected,
-      siblingParentMessageIds,
-    ],
+    [conversationId, openPanel, refresh, setSelected, siblingParentMessageIds],
   );
   return (
     <section
@@ -158,18 +153,19 @@ function EventSubagentRows({
       /** `text-text-primary` on the root, like `SubagentActivity` and
        *  `SubagentThreadPanel`: the child rows are raw buttons that inherit
        *  their label color, and without a themed ancestor they bottom out at
-       *  the unthemed black body color — invisible on the dark surface. */
-      className="my-2 overflow-hidden rounded-lg border border-border-light bg-surface-secondary/40 text-text-primary"
+       *  the unthemed black body color, invisible on the dark surface. */
+      className="border-border-light bg-surface-secondary/40 text-text-primary my-2 overflow-hidden rounded-lg border"
       data-event-subagent-group={eventChildren[0]?.parentMessageId}
+      data-event-subagent-conversation={conversationId}
     >
       <Button
-        variant="ghost"
+        variant="quiet"
         type="button"
         onClick={() => setExpanded((value) => !value)}
         aria-expanded={expanded}
         aria-controls={panelId}
         aria-label={`${localize('com_ui_subagent_activity')}: ${summary}`}
-        className="flex h-auto min-h-10 w-full items-center justify-start gap-2 rounded-lg px-3 py-2 text-left text-text-secondary hover:bg-surface-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring-primary focus-visible:ring-offset-0"
+        className="focus-visible:ring-ring-primary flex h-auto min-h-10 w-full items-center justify-start px-3 text-start focus-visible:ring-offset-0 focus-visible:ring-inset"
       >
         <Bot size={15} className="shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{summary}</span>
@@ -182,7 +178,7 @@ function EventSubagentRows({
       <div
         id={panelId}
         hidden={!expanded}
-        className="divide-y divide-border-light border-t border-border-light"
+        className="divide-border-inset border-border-inset divide-y border-t"
       >
         {eventChildren.map((child) => {
           const agent = child.agentId == null ? undefined : agentsMap?.[child.agentId];
@@ -194,11 +190,12 @@ function EventSubagentRows({
               type="button"
               disabled={!canOpen}
               onClick={() => openChild(child)}
+              data-subagent-thread={child.threadId}
               data-subagent-tool-call={`event-thread:${child.threadId}`}
               data-subagent-parent-message={child.parentMessageId}
               data-subagent-part-index="0"
               className={cn(
-                'flex w-full items-center gap-2 px-3 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring-primary',
+                'focus-visible:ring-ring-primary flex w-full items-center gap-2 px-3 py-2 text-start text-sm focus-visible:ring-2 focus-visible:outline-hidden focus-visible:ring-inset',
                 canOpen ? 'hover:bg-surface-hover' : 'cursor-default opacity-70',
               )}
             >
@@ -212,23 +209,30 @@ function EventSubagentRows({
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{label}</span>
                 {child.actorId && child.actorId !== label ? (
-                  <span className="block truncate text-xs text-text-secondary">
+                  <span className="text-text-secondary block truncate text-xs">
                     {child.actorId}
                   </span>
                 ) : null}
               </span>
-              {/* Fixed-width slot: the dot gives at-a-glance color, the text
-                  keeps a non-color cue, and neither can shift the row as
-                  statuses change length. */}
-              <span className="flex w-24 shrink-0 items-center justify-end gap-1.5 text-xs text-text-secondary">
+              {/* Fixed-width slot, dot last: the label absorbs every length
+                  change inboard of it, so the color lands on the same pixel
+                  column in every row and cannot drift as statuses change. */}
+              <span className="text-text-secondary flex w-24 shrink-0 items-center justify-end gap-1.5 text-xs">
                 <span
                   className={cn(
-                    'h-2 w-2 shrink-0 rounded-full border border-border-heavy/40',
+                    'min-w-0 truncate',
+                    isLiveSubagentStatus(child.status) && 'shimmer',
+                  )}
+                >
+                  {localize(subagentStatusLabelKey(child.status))}
+                </span>
+                <span
+                  className={cn(
+                    'border-border-heavy/40 h-2 w-2 shrink-0 rounded-full border',
                     subagentStatusDotClass(child.status),
                   )}
                   aria-hidden="true"
                 />
-                <span className="truncate">{localize(subagentStatusLabelKey(child.status))}</span>
               </span>
             </button>
           );

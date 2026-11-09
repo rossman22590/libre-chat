@@ -1,11 +1,11 @@
 import React from 'react';
-import { Check } from 'lucide-react';
-import { TooltipAnchor } from '@librechat/client';
-import type { LucideIcon } from 'lucide-react';
+import { Check } from 'lucide';
+import { MorphIcon, TooltipAnchor } from '@librechat/client';
+import type { IconInput } from '@librechat/client';
 import cn from '~/utils/cn';
 
 interface ActionButtonProps {
-  icon: LucideIcon;
+  icon: IconInput;
   isActive: boolean;
   label: string;
   activeLabel: string;
@@ -14,12 +14,13 @@ interface ActionButtonProps {
   tabIndex?: number;
   className?: string;
   portalElement?: HTMLElement | null;
+  disabled?: boolean;
 }
 
 const ActionButton = React.forwardRef<HTMLButtonElement, ActionButtonProps>(
   (
     {
-      icon: Icon,
+      icon,
       isActive,
       label,
       activeLabel,
@@ -28,6 +29,7 @@ const ActionButton = React.forwardRef<HTMLButtonElement, ActionButtonProps>(
       tabIndex,
       className,
       portalElement,
+      disabled = false,
     },
     ref,
   ) => {
@@ -38,31 +40,23 @@ const ActionButton = React.forwardRef<HTMLButtonElement, ActionButtonProps>(
         ref={ref}
         type="button"
         onClick={onClick}
+        disabled={disabled}
         tabIndex={tabIndex}
         aria-label={currentLabel}
         className={cn(
-          'inline-flex select-none items-center justify-center text-text-secondary transition-all duration-200 ease-out',
+          'text-text-secondary inline-flex items-center justify-center transition-all duration-200 ease-out select-none',
           'hover:bg-surface-hover hover:text-text-primary',
-          'focus-visible:outline focus-visible:outline-2 focus-visible:outline-border-heavy',
-          iconOnly ? 'rounded-lg p-1.5' : 'ml-auto gap-2 rounded-md px-2 py-1',
+          'disabled:pointer-events-none disabled:opacity-50',
+          'focus-visible:outline-focus-subtle focus-visible:outline focus-visible:outline-2',
+          iconOnly ? 'rounded-lg p-1.5' : 'ms-auto gap-2 rounded-md px-2 py-1',
           className,
         )}
       >
-        <span className="relative flex size-[18px] items-center justify-center" aria-hidden="true">
-          <Icon
-            size={18}
-            className={cn(
-              'absolute transition-all duration-300 ease-out',
-              isActive ? 'rotate-[-90deg] scale-0 opacity-0' : 'rotate-0 scale-100 opacity-100',
-            )}
-          />
-          <Check
-            size={18}
-            className={cn(
-              'transition-all duration-300 ease-out',
-              isActive ? 'rotate-0 scale-100 opacity-100' : 'rotate-90 scale-0 opacity-0',
-            )}
-          />
+        <span
+          className="relative flex size-[1.125rem] items-center justify-center"
+          aria-hidden="true"
+        >
+          <MorphIcon icon={isActive ? Check : icon} size="1.125rem" />
         </span>
         {!iconOnly && (
           <span className="relative overflow-hidden">

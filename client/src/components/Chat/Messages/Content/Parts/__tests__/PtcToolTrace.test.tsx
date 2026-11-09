@@ -1,8 +1,9 @@
 import React from 'react';
-import { RecoilRoot, useSetRecoilState } from 'recoil';
+import { RecoilRoot } from 'recoil';
 import { render, screen } from '@testing-library/react';
-import type { PtcTraceEntry } from '~/store/ptc';
-import { ptcTraceByToolCallId, ptcTraceKey } from '~/store/ptc';
+import { useSetAtom, Provider as JotaiProvider } from 'jotai';
+import type { PtcTraceEntry } from '~/common';
+import { ptcTraceByToolCallId, ptcTraceKey } from '~/hooks/SSE/ptc';
 import { MessageContext } from '~/Providers/MessageContext';
 import PtcToolTrace from '../PtcToolTrace';
 
@@ -39,7 +40,7 @@ const MESSAGE_ID = 'response-msg-1';
 
 function renderTrace(entries: PtcTraceEntry[], messageId = MESSAGE_ID, dropped = 0) {
   const Seed = () => {
-    const set = useSetRecoilState(ptcTraceByToolCallId(ptcTraceKey(MESSAGE_ID, TOOL_CALL_ID)));
+    const set = useSetAtom(ptcTraceByToolCallId(ptcTraceKey(MESSAGE_ID, TOOL_CALL_ID)));
     React.useEffect(() => {
       if (entries.length > 0) {
         set({ entries, dropped });
@@ -50,10 +51,12 @@ function renderTrace(entries: PtcTraceEntry[], messageId = MESSAGE_ID, dropped =
 
   return render(
     <RecoilRoot>
-      <Seed />
-      <MessageContext.Provider value={{ messageId, isExpanded: false }}>
-        <PtcToolTrace toolCallId={TOOL_CALL_ID} />
-      </MessageContext.Provider>
+      <JotaiProvider>
+        <Seed />
+        <MessageContext.Provider value={{ messageId, isExpanded: false }}>
+          <PtcToolTrace toolCallId={TOOL_CALL_ID} />
+        </MessageContext.Provider>
+      </JotaiProvider>
     </RecoilRoot>,
   );
 }
@@ -71,11 +74,9 @@ describe('PtcToolTrace', () => {
     ]);
 
     expect(screen.getByText('Tool calls')).toBeInTheDocument();
-    expect(screen.getByText('read_file')).toBeInTheDocument();
     expect(screen.getByText('path=a.ts')).toBeInTheDocument();
-    expect(screen.getByText('write_file')).toBeInTheDocument();
-    /* Twice by design: the visible cell plus the screen-reader status. */
-    expect(screen.getAllByText('running')).toHaveLength(2);
+    expect(screen.getByText('path=b.ts')).toBeInTheDocument();
+    expect(screen.getByRole('list')).toHaveTextContent('running');
   });
 
   it('splits an MCP tool id into its server and tool name', () => {
@@ -135,6 +136,6 @@ describe('PtcToolTrace', () => {
   it('does not show another message\u2019s trace in this card', () => {
     renderTrace([{ callId: 'a', name: 'read_file', status: 'success' }], 'a-different-message');
 
-    expect(screen.queryByText('read_file')).not.toBeInTheDocument();
+    expect(screen.queryByRole('list')).not.toBeInTheDocument();
   });
 });

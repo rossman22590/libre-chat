@@ -1,6 +1,13 @@
 import { SettingsTabValues } from 'librechat-data-provider';
 import type { SettingEntry } from './types';
 import {
+  unseenTabBadgeAtom,
+  replyNotificationsAtom,
+  replyNotificationSoundAtom,
+  unlockReplyNotificationSound,
+  requestReplyNotificationPermission,
+} from '~/hooks';
+import {
   TextToSpeechSwitch,
   VoiceDropdown,
   CacheTTSSwitch,
@@ -22,11 +29,13 @@ import LangfuseConnection from '../SettingsTabs/Integrations/LangfuseConnection'
 import ClockFormatSelector from '../SettingsTabs/General/ClockFormatSelector';
 import ExportConversations from '../SettingsTabs/Data/ExportConversations';
 import ImportConversations from '../SettingsTabs/Data/ImportConversations';
+import AnalyticsConsentToggle from '../SettingsTabs/Data/AnalyticsConsent';
 import WeekStartSelector from '../SettingsTabs/General/WeekStartSelector';
 import { ArchiveAllChats } from '../SettingsTabs/Data/ArchiveAllChats';
 import { toggleControl, ThemeSetting, LangSetting } from './controls';
 import BackupCodesItem from '../SettingsTabs/Account/BackupCodesItem';
 import { EngineSTTSetting, EngineTTSSetting } from './SpeechControls';
+import UiScaleSelector from '../SettingsTabs/General/UiScaleSelector';
 import FontSizeSelector from '../SettingsTabs/Chat/FontSizeSelector';
 import ChatTitleInTab from '../SettingsTabs/General/ChatTitleInTab';
 import AdvancedPrompts from '../SettingsTabs/Chat/AdvancedPrompts';
@@ -38,6 +47,7 @@ import ChatDirection from '../SettingsTabs/Chat/ChatDirection';
 import { DeleteCache } from '../SettingsTabs/Data/DeleteCache';
 import { ManageFiles } from '../SettingsTabs/Data/ManageFiles';
 import { smoothStreamingAtom } from '~/store/smoothStreaming';
+import ChangeEmail from '../SettingsTabs/Account/ChangeEmail';
 import { RevokeKeys } from '../SettingsTabs/Data/RevokeKeys';
 import { ClearChats } from '../SettingsTabs/Data/ClearChats';
 import { TokenCredits, AutoRefill } from './BillingControls';
@@ -45,10 +55,14 @@ import AdminPanel from '../SettingsTabs/General/AdminPanel';
 import TransactionHistory from '../SettingsTabs/Balance/TransactionHistory';
 import SharedLinks from '../SettingsTabs/Data/SharedLinks';
 import ImageResize from '../SettingsTabs/Chat/ImageResize';
+import Passkeys from '../SettingsTabs/Account/Passkeys';
 import { showThinkingAtom } from '~/store/showThinking';
 import ProviderKeys from '../SettingsTabs/ProviderKeys';
+import { showLiaAtom } from '~/components/Lia/store';
 import { autoScrollAtom } from '~/store/autoScroll';
 import Avatar from '../SettingsTabs/Account/Avatar';
+import ConnectedAccounts from './ConnectedAccounts';
+import CodeEnvironments from './CodeEnvironments';
 import About from '../SettingsTabs/About/About';
 import ApiKeys from '../SettingsTabs/ApiKeys';
 import MemoryToggle from './MemoryToggle';
@@ -64,7 +78,15 @@ export const registry: SettingEntry[] = [
     tab: GENERAL,
     section: 'appearance',
     labelKey: 'com_nav_theme',
-    keywords: ['dark', 'light', 'appearance', 'color'],
+    keywords: [
+      'dark',
+      'light',
+      'appearance',
+      'color',
+      'contrast',
+      'high contrast',
+      'accessibility',
+    ],
     Component: ThemeSetting,
   },
   {
@@ -82,6 +104,14 @@ export const registry: SettingEntry[] = [
     labelKey: 'com_nav_font_size',
     keywords: ['text', 'zoom'],
     Component: FontSizeSelector,
+  },
+  {
+    id: 'uiScale',
+    tab: GENERAL,
+    section: 'appearance',
+    labelKey: 'com_nav_ui_scale',
+    keywords: ['zoom', 'scale', 'size', 'interface', 'display'],
+    Component: UiScaleSelector,
   },
   {
     id: 'chatDirection',
@@ -131,6 +161,21 @@ export const registry: SettingEntry[] = [
     }),
   },
   {
+    id: 'showLia',
+    tab: GENERAL,
+    section: 'layout',
+    labelKey: 'com_nav_show_lia',
+    keywords: ['mascot', 'lia', 'fun', 'animation', 'welcome'],
+    show: (ctx) => ctx.mascotAllowed,
+    Component: toggleControl({
+      stateAtom: showLiaAtom,
+      localizationKey: 'com_nav_show_lia',
+      switchId: 'showLia',
+      hoverCardText: 'com_nav_info_show_lia',
+      beta: true,
+    }),
+  },
+  {
     id: 'showScrollButton',
     tab: GENERAL,
     section: 'layout',
@@ -161,6 +206,60 @@ export const registry: SettingEntry[] = [
     labelKey: 'com_nav_chat_title_in_tab',
     keywords: ['tab', 'title', 'browser', 'window'],
     Component: ChatTitleInTab,
+  },
+  // General · Notifications
+  {
+    id: 'unseenTabBadge',
+    tab: GENERAL,
+    section: 'notifications',
+    show: (ctx) => ctx.replyTabBadgeAllowed,
+    labelKey: 'com_nav_unseen_tab_badge',
+    Component: toggleControl({
+      stateAtom: unseenTabBadgeAtom,
+      localizationKey: 'com_nav_unseen_tab_badge',
+      switchId: 'unseenTabBadge',
+      hoverCardText: 'com_nav_info_unseen_tab_badge',
+    }),
+  },
+  {
+    id: 'replyNotifications',
+    tab: GENERAL,
+    section: 'notifications',
+    show: (ctx) => ctx.replyNotificationsAllowed,
+    labelKey: 'com_nav_reply_notifications',
+    Component: toggleControl({
+      stateAtom: replyNotificationsAtom,
+      localizationKey: 'com_nav_reply_notifications',
+      switchId: 'replyNotifications',
+      hoverCardText: 'com_nav_info_reply_notifications',
+      /* The toggle click is the user gesture browsers require before asking for
+         desktop-notification permission. */
+      onCheckedChange: (value) => {
+        if (value) {
+          requestReplyNotificationPermission();
+        }
+      },
+    }),
+  },
+  {
+    id: 'replyNotificationSound',
+    tab: GENERAL,
+    section: 'notifications',
+    show: (ctx) => ctx.replyNotificationSoundAllowed,
+    labelKey: 'com_nav_reply_notification_sound',
+    Component: toggleControl({
+      stateAtom: replyNotificationSoundAtom,
+      localizationKey: 'com_nav_reply_notification_sound',
+      switchId: 'replyNotificationSound',
+      hoverCardText: 'com_nav_info_reply_notification_sound',
+      /* Browsers only let an audio output open behind a user gesture, and alerts fire while
+         the tab is unfocused; this click is the gesture that unlocks it. */
+      onCheckedChange: (value) => {
+        if (value) {
+          unlockReplyNotificationSound();
+        }
+      },
+    }),
   },
   // General · Accessibility
   {
@@ -206,19 +305,6 @@ export const registry: SettingEntry[] = [
     labelKey: 'com_nav_during_run_action',
     keywords: ['steer', 'queue', 'interrupt', 'generating'],
     Component: DuringRunAction,
-  },
-  {
-    id: 'steerInterruptsByDefault',
-    tab: CHAT,
-    section: 'sending',
-    labelKey: 'com_ui_steer_interrupts_default',
-    keywords: ['steer', 'interrupt', 'preempt', 'generating', 'stop'],
-    Component: toggleControl({
-      stateAtom: store.steerInterruptsByDefault,
-      localizationKey: 'com_ui_steer_interrupts_default',
-      switchId: 'steerInterruptsByDefault',
-      hoverCardText: 'com_ui_steer_interrupts_default_info',
-    }),
   },
   {
     id: 'saveDrafts',
@@ -368,6 +454,19 @@ export const registry: SettingEntry[] = [
       localizationKey: 'com_nav_smooth_streaming',
       switchId: 'smoothStreaming',
       hoverCardText: 'com_nav_info_smooth_streaming',
+    }),
+  },
+  {
+    id: 'copyRichText',
+    tab: CHAT,
+    section: 'messages',
+    labelKey: 'com_nav_copy_rich_text',
+    keywords: ['copy', 'clipboard', 'rich', 'html', 'format', 'markdown', 'paste'],
+    Component: toggleControl({
+      stateAtom: store.copyRichText,
+      localizationKey: 'com_nav_copy_rich_text',
+      switchId: 'copyRichText',
+      hoverCardText: 'com_nav_info_copy_rich_text',
     }),
   },
   {
@@ -590,6 +689,15 @@ export const registry: SettingEntry[] = [
     show: (ctx) => ctx.hasStatefulCodeSessions,
     Component: StatefulWorkspaceDefault,
   },
+  {
+    id: 'codeEnvironments',
+    tab: DATA,
+    section: 'codeExecution',
+    labelKey: 'com_ui_code_environments',
+    keywords: ['bridge', 'cli', 'code', 'environment', 'sandbox', 'vm', 'worker'],
+    show: (ctx) => ctx.hasStatefulCodeSessions,
+    Component: CodeEnvironments,
+  },
   // Data controls · Your data
   {
     id: 'importConversations',
@@ -629,6 +737,15 @@ export const registry: SettingEntry[] = [
     keywords: ['archive', 'chats', 'conversations', 'bulk'],
     Component: ArchiveAllChats,
   },
+  {
+    id: 'analyticsConsent',
+    tab: DATA,
+    section: 'data',
+    labelKey: 'com_ui_analytics_consent_setting',
+    keywords: ['analytics', 'cookies', 'consent', 'tracking', 'privacy', 'google', 'gtm'],
+    show: (ctx) => ctx.analyticsConfigured,
+    Component: AnalyticsConsentToggle,
+  },
   // Data controls · API keys
   {
     id: 'providerApiKeys',
@@ -661,7 +778,7 @@ export const registry: SettingEntry[] = [
     section: 'langfuse',
     labelKey: 'com_ui_langfuse_title',
     keywords: ['langfuse', 'observability', 'tracing', 'telemetry', 'traces'],
-    show: (ctx) => ctx.langfuseConnectionAccess,
+    show: (ctx) => ctx.langfuseConnectionAccess || ctx.langfusePromptSyncAccess === true,
     Component: LangfuseConnection,
   },
   // Data controls · Danger zone
@@ -688,13 +805,22 @@ export const registry: SettingEntry[] = [
     labelKey: 'com_ui_settings_label_avatar',
     Component: Avatar,
   },
+  {
+    id: 'changeEmail',
+    tab: ACCOUNT,
+    section: 'profile',
+    labelKey: 'com_ui_settings_label_change_email',
+    keywords: ['email', 'address', 'account'],
+    show: (ctx) => ctx.isLocalProvider && ctx.emailEnabled && ctx.allowEmailChange,
+    Component: ChangeEmail,
+  },
   // Account · Security
   {
     id: 'twoFactor',
     tab: ACCOUNT,
     section: 'security',
     labelKey: 'com_ui_settings_label_2fa',
-    show: (ctx) => ctx.isLocalProvider,
+    show: (ctx) => ctx.isTwoFactorPolicyProvider,
     Component: EnableTwoFactorItem,
   },
   {
@@ -702,8 +828,27 @@ export const registry: SettingEntry[] = [
     tab: ACCOUNT,
     section: 'security',
     labelKey: 'com_ui_settings_label_backup_codes',
-    show: (ctx) => ctx.isLocalProvider && ctx.twoFactorEnabled,
+    show: (ctx) => ctx.isTwoFactorPolicyProvider && ctx.twoFactorEnabled,
     Component: BackupCodesItem,
+  },
+  {
+    id: 'passkeys',
+    tab: ACCOUNT,
+    section: 'security',
+    labelKey: 'com_ui_passkeys',
+    keywords: ['passkey', 'webauthn', 'fido', 'security key', 'passwordless'],
+    show: (ctx) => ctx.passkeyLoginEnabled,
+    Component: Passkeys,
+  },
+  // Account · Connected accounts
+  {
+    id: 'pullRequestAccount',
+    tab: ACCOUNT,
+    section: 'connections',
+    labelKey: 'com_ui_settings_label_pull_request_account',
+    keywords: ['github', 'gitlab', 'bitbucket', 'pull request', 'oauth', 'connect'],
+    show: (ctx) => ctx.hasPullRequestConnect,
+    Component: ConnectedAccounts,
   },
   // Account · Billing
   {

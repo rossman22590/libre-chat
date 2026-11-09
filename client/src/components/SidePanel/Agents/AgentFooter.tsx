@@ -60,6 +60,7 @@ export default function AgentFooter({
   const canEditThisAgent = hasPermission(PermissionBits.EDIT);
   const canDeleteThisAgent = hasPermission(PermissionBits.DELETE);
   const canShareRemoteAgent = hasRemoteAgentPermission(PermissionBits.SHARE);
+  const isAdmin = user?.role === SystemRoles.ADMIN;
   const isSaving = createMutation.isLoading || updateMutation.isLoading || isAvatarUploading;
   const saveLabel = agent_id ? localize('com_ui_save') : localize('com_ui_create');
   const renderSaveButton = () => (
@@ -94,8 +95,8 @@ export default function AgentFooter({
               createMutation={createMutation}
             />
           )}
-        {(agent?.author === user?.id || user?.role === SystemRoles.ADMIN || canShareThisAgent) &&
-          hasAccessToShareAgents &&
+        {(agent?.author === user?.id || isAdmin || canShareThisAgent) &&
+          (hasAccessToShareAgents || isAdmin) &&
           !permissionsLoading && (
             <GenericGrantAccessDialog
               resourceDbId={agent?._id}
@@ -115,11 +116,12 @@ export default function AgentFooter({
               resourceType={ResourceType.REMOTE_AGENT}
             >
               <Button
-                type="button"
                 variant="outline"
+                size="dense"
+                type="button"
                 aria-label={localize('com_ui_remote_access')}
                 title={localize('com_ui_remote_access')}
-                className="h-9 w-auto px-3"
+                className="h-9 w-auto"
               >
                 <Globe className="h-4 w-4" aria-hidden="true" />
               </Button>
@@ -130,7 +132,7 @@ export default function AgentFooter({
         {/* Submit Button */}
         <Button
           variant="submit"
-          className="h-9 w-full px-4 py-2 font-semibold"
+          className="h-9 w-full font-semibold"
           type="submit"
           disabled={isSaving}
           aria-busy={isSaving}
