@@ -330,7 +330,8 @@ describe('loadCustomConfig', () => {
     const debugged = JSON.stringify(logger.debug.mock.calls);
     expect(logged).not.toContain('gateway-credential');
     expect(debugged).not.toContain('gateway-credential');
-    expect(logged).toContain('***');
+    /* The info log is a summary that omits headers; the full config is masked at debug level. */
+    expect(debugged).toContain('***');
     // The masking is for logging only — the live config keeps real values.
     expect(result.langfuse.headers['CF-Access-Client-Secret']).toBe('gateway-credential');
   });

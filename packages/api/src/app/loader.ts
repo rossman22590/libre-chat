@@ -17,6 +17,32 @@ import { checkConfigPolicyLinks } from './interface';
 import { expandCustomEndpoint } from './params';
 import { checkConfigTheme } from './theme';
 
+/** Startup log summary: names and toggles only, so the full config stays at debug level. */
+function summarizeConfigForLog(customConfig: TCustomConfig) {
+  const customEndpoints = (customConfig.endpoints?.custom ?? [])
+    .map((endpoint) => endpoint.name)
+    .filter(Boolean);
+
+  return {
+    version: customConfig.version,
+    cache: customConfig.cache,
+    interface: {
+      keys: Object.keys(customConfig.interface ?? {}),
+      skills: customConfig.interface?.skills,
+      agents: customConfig.interface?.agents,
+      marketplace: customConfig.interface?.marketplace,
+    },
+    endpoints: {
+      agents: {
+        disableBuilder: customConfig.endpoints?.agents?.disableBuilder,
+        capabilities: customConfig.endpoints?.agents?.capabilities,
+      },
+      custom: customEndpoints,
+    },
+    modelSpecs: customConfig.modelSpecs?.list?.length ?? 0,
+  };
+}
+
 export type CustomConfigLoadMode = 'startup' | 'reload';
 
 export interface CustomConfigLoadOptions {
@@ -332,10 +358,9 @@ export function createCustomConfigLoader({
       }
 
       if (printConfig) {
-        const loggableConfig = redactConfig(customConfig);
-        logger.info('Custom config file loaded:');
-        logger.info(JSON.stringify(loggableConfig, null, 2));
-        logger.debug('Custom config:', loggableConfig);
+        logger.info('Custom config file loaded.');
+        logger.info(JSON.stringify(summarizeConfigForLog(customConfig), null, 2));
+        logger.debug('Custom config:', redactConfig(customConfig));
       }
 
       onLoad?.({ config: customConfig, digest });
