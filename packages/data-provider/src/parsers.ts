@@ -527,21 +527,33 @@ export type ParsedEphemeralAgentId = {
   index?: number;
 };
 
+/** Whether an endpoint name refers to OpenRouter, whose model ids name the model they route to. */
+export const isOpenRouterEndpointName = (endpoint?: string | null): boolean =>
+  typeof endpoint === 'string' && endpoint.toLowerCase().includes(Providers.OPENROUTER);
+
 /**
  * Resolves the display label ("sender") for an ephemeral agent:
  * `modelLabel` (user/preset) → model spec's `label` → endpoint config's
  * `modelDisplayLabel` → `''` (lets consumers fall back to the model name).
+ *
+ * OpenRouter serves many vendors' models behind one endpoint, so its endpoint label would
+ * name the router rather than the model; with a known `model`, the model id is used instead.
  */
 export function getEphemeralSender({
   modelLabel,
   specLabel,
   modelDisplayLabel,
+  endpoint,
+  model,
 }: {
   modelLabel?: string | null;
   specLabel?: string | null;
   modelDisplayLabel?: string | null;
+  endpoint?: string | null;
+  model?: string | null;
 }): string {
-  return modelLabel ?? specLabel ?? modelDisplayLabel ?? '';
+  const endpointLabel = isOpenRouterEndpointName(endpoint) && model ? model : modelDisplayLabel;
+  return modelLabel ?? specLabel ?? endpointLabel ?? '';
 }
 
 /** Built-in endpoints; anything else in `endpoint` is a custom endpoint's own name. */

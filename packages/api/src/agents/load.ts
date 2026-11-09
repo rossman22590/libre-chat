@@ -176,6 +176,8 @@ export async function loadEphemeralAgent(
     specLabel: modelSpec?.label,
     modelDisplayLabel: (endpointConfig as { modelDisplayLabel?: string } | undefined)
       ?.modelDisplayLabel,
+    endpoint,
+    model: model as string,
   });
 
   // Encode ephemeral agent ID with endpoint, model, and computed sender for display
