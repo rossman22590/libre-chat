@@ -595,27 +595,27 @@ endpoints:
     supportedIds:  ["asst_zkk3O1ezwiSZOeL8fawwNM4T", "asst_u51esOrG7mUSvFatT0jfmPAy", "asst_55xDogtGtbZkA3Zxv1QMxZ2Y"]
     # excludedIds: ["asst_excludedAssistantId"]
   custom:
-    - name: "Mistral"
-      apiKey: "${MISTRAL_API_KEY}"
-      baseURL: "https://api.mistral.ai/v1"
-      models:
-        default: ["mistral-tiny", "mistral-small", "mistral-medium"]
-        fetch: true  # Attempt to dynamically fetch available models
-        userIdQuery: false
-      titleConvo: true
-      titleMethod: "completion"
-      titleModel: "mistral-tiny"
-      summarize: true
-      summaryModel: "mistral-summary"
-      forcePrompt: false
-      modelDisplayLabel: "Mistral AI"
-      addParams:
-        safe_prompt: true
-      dropParams:
-        - "stop"
-        - "user"
-        - "presence_penalty"
-        - "frequency_penalty"
+    # - name: "Mistral"
+    #   apiKey: "${MISTRAL_API_KEY}"
+    #   baseURL: "https://api.mistral.ai/v1"
+    #   models:
+    #     default: ["mistral-tiny", "mistral-small", "mistral-medium"]
+    #     fetch: true  # Attempt to dynamically fetch available models
+    #     userIdQuery: false
+    #   titleConvo: true
+    #   titleMethod: "completion"
+    #   titleModel: "mistral-tiny"
+    #   summarize: true
+    #   summaryModel: "mistral-summary"
+    #   forcePrompt: false
+    #   modelDisplayLabel: "Mistral AI"
+    #   addParams:
+    #     safe_prompt: true
+    #   dropParams:
+    #     - "stop"
+    #     - "user"
+    #     - "presence_penalty"
+    #     - "frequency_penalty"
       # headers:
       #    x-custom-header: "${CUSTOM_HEADER_VALUE}"
     # - name: "OpenRouter"
@@ -938,7 +938,7 @@ endpoints:
       apiKey: "${XAI_API_KEY}"
       baseURL: "https://api.x.ai/v1"
       models:
-        default: ["grok-3-mini"]
+        default: ["grok-4.7", "grok-3-mini"]
         fetch: true
       titleConvo: true
       titleMethod: "completion"
