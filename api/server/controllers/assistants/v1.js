@@ -7,9 +7,25 @@ const {
   contentFilterBlockResponse,
   contentFilterUninspectableResponse,
   getBlockedUninspectableFileField,
+  resolveAssistantToolPermissions,
+  getAssistantErrorStatus,
+  resolveAssistantAvatarIdentity,
+  commitAssistantAvatar,
 } = require('@librechat/api');
 const { FileContext } = require('librechat-data-provider');
-const { deleteFileByFilter, updateAssistantDoc, getAssistants } = require('~/models');
+const {
+  deleteFileByFilter,
+  updateAssistantDoc,
+  updateAssistantAvatar,
+  getAssistants,
+  getAssistant,
+  getRoleByName,
+  getUserById,
+  getFiles,
+  acquireResourceLock,
+  renewResourceLock,
+  releaseResourceLock,
+} = require('~/models');
 const { uploadImageBuffer, filterFile } = require('~/server/services/Files/process');
 const validateAuthor = require('~/server/middleware/assistants/validateAuthor');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
@@ -53,6 +69,11 @@ const createAssistant = async (req, res) => {
       toolDefinitions,
       accessibleServerNames,
     });
+    const isNativeToolPermitted = await resolveAssistantToolPermissions({
+      req,
+      tools,
+      getRoleByName,
+    });
 
     assistantData.tools = healedTools
       .map((tool) => {
@@ -81,7 +102,16 @@ const createAssistant = async (req, res) => {
       })
       .filter((tool) => tool)
       .flat()
-      .map(toProviderToolDefinition);
+      .map(toProviderToolDefinition)
+      .filter((tool) => {
+        if (isNativeToolPermitted(tool)) {
+          return true;
+        }
+        logger.warn(
+          `[/assistants] Dropping role-denied native tool from assistant payload: ${tool?.type}`,
+        );
+        return false;
+      });
 
     let azureModelIdentifier = null;
     if (openai.locals?.azureOptions) {
@@ -104,7 +134,7 @@ const createAssistant = async (req, res) => {
       createData.append_current_datetime = append_current_datetime;
     }
 
-    const document = await updateAssistantDoc({ assistant_id: assistant.id }, createData);
+    const document = await updateAssistantDoc({ assistantId: assistant.id }, createData);
 
     if (azureModelIdentifier) {
       assistant.model = azureModelIdentifier;
@@ -182,6 +212,11 @@ const patchAssistant = async (req, res) => {
       toolDefinitions,
       accessibleServerNames,
     });
+    const isNativeToolPermitted = await resolveAssistantToolPermissions({
+      req,
+      tools: updateData.tools,
+      getRoleByName,
+    });
 
     updateData.tools = healedTools
       .map((tool) => {
@@ -210,7 +245,16 @@ const patchAssistant = async (req, res) => {
       })
       .filter((tool) => tool)
       .flat()
-      .map(toProviderToolDefinition);
+      .map(toProviderToolDefinition)
+      .filter((tool) => {
+        if (isNativeToolPermitted(tool)) {
+          return true;
+        }
+        logger.warn(
+          `[/assistants] Dropping role-denied native tool from assistant payload: ${tool?.type}`,
+        );
+        return false;
+      });
 
     if (openai.locals?.azureOptions && updateData.model) {
       updateData.model = openai.locals.azureOptions.azureOpenAIApiDeploymentName;
@@ -220,14 +264,14 @@ const patchAssistant = async (req, res) => {
 
     if (conversation_starters !== undefined) {
       const conversationStartersUpdate = await updateAssistantDoc(
-        { assistant_id },
+        { assistantId: assistant_id },
         { conversation_starters },
       );
       updatedAssistant.conversation_starters = conversationStartersUpdate.conversation_starters;
     }
 
     if (append_current_datetime !== undefined) {
-      await updateAssistantDoc({ assistant_id }, { append_current_datetime });
+      await updateAssistantDoc({ assistantId: assistant_id }, { append_current_datetime });
       updatedAssistant.append_current_datetime = append_current_datetime;
     }
 
@@ -368,75 +412,64 @@ const uploadAssistantAvatar = async (req, res) => {
     }
 
     const { assistant_id } = req.params;
-    const endpoint = req.body?.endpoint ?? req.query?.endpoint;
     if (!assistant_id) {
       return res.status(400).json({ message: 'Assistant ID is required' });
     }
 
     const { openai } = await getOpenAIClient({ req, res });
-    await validateAuthor({ req, openai });
-
-    const buffer = await fs.readFile(req.file.path);
-    const image = await uploadImageBuffer({
+    const assistantQuery = await validateAuthor({
       req,
-      context: FileContext.avatar,
-      metadata: { buffer },
+      openai,
+      overrideAssistantId: assistant_id,
     });
 
-    let _metadata;
+    const assistant = await openai.beta.assistants.retrieve(assistant_id);
+    const _metadata = assistant.metadata ?? {};
+    const avatarIdentity = await resolveAssistantAvatarIdentity({
+      query: assistantQuery,
+      user: req.user,
+      endpoint: req.body?.endpoint ?? req.query?.endpoint,
+      author: _metadata.author,
+      privateAssistants:
+        req.config.endpoints?.[req.body?.endpoint ?? req.query?.endpoint]?.privateAssistants,
+      getAssistant,
+      getUserById,
+    });
 
-    try {
-      const assistant = await openai.beta.assistants.retrieve(assistant_id);
-      if (assistant) {
-        _metadata = assistant.metadata;
-      }
-    } catch (error) {
-      logger.error('[/:assistant_id/avatar] Error fetching assistant', error);
-      _metadata = {};
-    }
-
-    if (_metadata.avatar && _metadata.avatar_source) {
-      const { deleteFile } = getStrategyFunctions(_metadata.avatar_source);
-      try {
-        await deleteFile(req, {
-          filepath: _metadata.avatar,
-          user: req.user.id,
-          tenantId: req.user.tenantId,
-        });
-        await deleteFileByFilter({ user: req.user.id, filepath: _metadata.avatar });
-      } catch (error) {
-        logger.error('[/:assistant_id/avatar] Error deleting old avatar', error);
-      }
-    }
-
-    const metadata = {
-      ..._metadata,
-      avatar: image.filepath,
-      avatar_source: appConfig.fileStrategy,
-    };
-
-    const promises = [];
-    promises.push(
-      updateAssistantDoc(
-        { assistant_id },
-        {
-          avatar: {
-            filepath: image.filepath,
-            source: appConfig.fileStrategy,
-          },
-          user: req.user.id,
-          endpoint,
+    const updatedAssistant = await commitAssistantAvatar(
+      {
+        req,
+        query: assistantQuery,
+        identity: avatarIdentity,
+        uploadAvatar: async () => {
+          const buffer = await fs.readFile(req.file.path);
+          const image = await uploadImageBuffer({
+            req,
+            context: FileContext.avatar,
+            metadata: { buffer },
+          });
+          return { filepath: image.filepath, source: image.source ?? appConfig.fileStrategy };
         },
-      ),
+        metadata: _metadata,
+        leaseOptions: {
+          ttlMs: req.config.config?.permissions?.leaseTtlMs,
+          waitMs: req.config.config?.permissions?.leaseWaitMs,
+        },
+      },
+      {
+        lease: { acquireResourceLock, renewResourceLock, releaseResourceLock },
+        updateAssistantAvatar,
+        updateProvider: (id, body) => openai.beta.assistants.update(id, body),
+        getFiles,
+        deleteFileByFilter,
+        getStrategyFunctions,
+      },
     );
-    promises.push(openai.beta.assistants.update(assistant_id, { metadata }));
-
-    const resolved = await Promise.all(promises);
-    res.status(201).json(resolved[1]);
+    res.status(201).json(updatedAssistant);
   } catch (error) {
     const message = 'An error occurred while updating the Assistant Avatar';
     logger.error(message, error);
-    res.status(500).json({ message });
+    res.status(getAssistantErrorStatus(error)).json({ message });
   } finally {
     try {
       await fs.unlink(req.file.path);

@@ -1,5 +1,4 @@
 import { Readable } from 'stream';
-import { isAxiosError } from 'axios';
 import { Constants } from '@librechat/agents';
 import { logger } from '@librechat/data-schemas';
 import {
@@ -19,16 +18,27 @@ import {
   inspectContent,
   UninspectableFileError,
 } from '~/protection';
+import {
+  createCodeApiRateLimitBudget,
+  getCodeApiUploadOptions,
+  getSafeErrorMetadata,
+  isAbortError,
+  type CodeApiRateLimitBudget,
+  withCodeApiUploadRecovery,
+} from '~/utils';
 import { seedCodeFilesIntoSessions, type CodeExecutionProfileRoute } from './codeFilesSession';
 import { ContentFilterError, isContentFilterError } from '~/middleware/contentFilter';
 import { getCodeExecutionRouteKey, type CodeExecutionContext } from './execution';
-import { createConcurrencyLimiter, getSafeErrorMetadata } from '~/utils';
 import { assertSkillFileContentAllowed } from '~/skills/protection';
 import { createSkillContentDigest } from './compatibility';
+import { getLookupConcurrency } from '~/utils/concurrency';
 import { extractInvokedSkillsFromPayload } from './run';
+import { resolveDownloadPath } from '~/storage/path';
+import { mapWithConcurrency } from '~/utils/promise';
 import { SKILL_FILE_PREFIX } from './skills';
 
 const MAX_INSPECTABLE_SKILL_FILE_BYTES = 10 * 1024 * 1024;
+/** Bounds buffered bytes in flight: at most this many files of up to the cap above. */
 const SKILL_FILE_CONTENT_FIELDS = ['file_text'] as const;
 const FILE_CONTENT_FIELDS = ['content', 'extracted_text'] as const;
 
@@ -55,8 +65,16 @@ export interface PrimeSkillFilesParams {
   };
   skillFiles: SkillFileRecord[];
   req: ServerRequest;
+  /** Optional operation-wide wait allowance shared by sibling skill primes. */
+  rateLimitBudget?: CodeApiRateLimitBudget;
+  /** Effective foreground cancellation signal for acquisition, waits, and transport. */
+  signal?: AbortSignal;
   getStrategyFunctions: (source: string) => {
-    getDownloadStream?: (req: ServerRequest, filepath: string) => Promise<NodeJS.ReadableStream>;
+    getDownloadStream?: (
+      req: ServerRequest,
+      filepath: string,
+      options?: { signal?: AbortSignal },
+    ) => Promise<NodeJS.ReadableStream>;
     [key: string]: unknown;
   };
   batchUploadCodeEnvFiles: (params: {
@@ -75,6 +93,8 @@ export interface PrimeSkillFilesParams {
     read_only?: boolean;
     codeApiBaseUrl?: string;
     executionProfile?: CodeExecutionContext['executionProfile'];
+    bridgeWorkerId?: string;
+    signal?: AbortSignal;
   }) => Promise<{
     storage_session_id: string;
     files: Array<{ fileId: string; filename: string }>;
@@ -86,12 +106,14 @@ export interface PrimeSkillFilesParams {
     route?: {
       baseUrl?: string;
       executionProfile?: CodeExecutionContext['executionProfile'];
+      bridgeWorkerId?: string;
     },
+    signal?: AbortSignal,
   ) => Promise<string | null>;
   /** Trusted Code API route selected for the executing agent. */
   codeExecutionContext?: Pick<
     CodeExecutionContext,
-    'baseUrl' | 'executionProfile' | 'executionRouteKey'
+    'baseUrl' | 'executionProfile' | 'executionRouteKey' | 'bridgeWorkerId'
   >;
   /** 23-hour freshness check */
   checkIfActive?: (dateString: string) => boolean;
@@ -125,44 +147,42 @@ export interface PrimeSkillFilesResult {
   }>;
 }
 
-/** Cap on concurrent skill batch uploads per process. Bounds burst pressure
- *  on codeapi's per-user upload limiter (default 30 requests / 5 min). */
-const SKILL_UPLOAD_CONCURRENCY = 3;
-
-/** Retry a 429'd upload only when the server's Retry-After fits under this
- *  cap; a longer wait would stall a live chat turn worse than degrading. */
-const MAX_RETRY_AFTER_MS = 15_000;
-
-const uploadSlots = createConcurrencyLimiter(SKILL_UPLOAD_CONCURRENCY);
 const inflightPrimes = new Map<string, Promise<PrimeSkillFilesResult | null>>();
+const signalIds = new WeakMap<AbortSignal, number>();
+let nextSignalId = 1;
 
-type SkillUploadFiles = Array<{ stream: NodeJS.ReadableStream; filename: string }>;
-
-function getRetryAfterMs(error: unknown): number | null {
-  if (!isAxiosError(error) || error.response?.status !== 429) {
-    return null;
+function getSignalScope(signal?: AbortSignal): string {
+  if (!signal) {
+    return 'unscoped';
   }
-  const header = error.response.headers?.['retry-after'];
-  const seconds = Number(Array.isArray(header) ? header[0] : header);
-  if (!Number.isFinite(seconds) || seconds < 0) {
-    return null;
+  let id = signalIds.get(signal);
+  if (id == null) {
+    id = nextSignalId++;
+    signalIds.set(signal, id);
   }
-  return seconds * 1000;
+  return String(id);
 }
 
-/** Single retry on 429, honoring Retry-After up to MAX_RETRY_AFTER_MS.
- *  Runs inside an upload slot so the wait also brakes queued uploads. */
-async function retryOn429<T>(attempt: () => Promise<T>, label: string): Promise<T> {
+type SkillUploadFiles = Array<{ stream: NodeJS.ReadableStream; filename: string }>;
+type SkillCodeEnvRef = Extract<CodeEnvRef, { kind: 'skill' }>;
+
+function isCurrentSkillRef(
+  ref: CodeEnvRef | undefined,
+  skillVersion: number,
+): ref is SkillCodeEnvRef {
+  return ref?.kind === 'skill' && ref.version === skillVersion;
+}
+
+function destroySkillUploadStream(stream: NodeJS.ReadableStream): void {
   try {
-    return await attempt();
-  } catch (error) {
-    const retryAfterMs = getRetryAfterMs(error);
-    if (retryAfterMs == null || retryAfterMs > MAX_RETRY_AFTER_MS) {
-      throw error;
+    if (
+      'destroy' in stream &&
+      typeof (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy === 'function'
+    ) {
+      (stream as NodeJS.ReadableStream & { destroy: () => void }).destroy();
     }
-    logger.warn(`[primeSkillFiles] Rate-limited priming ${label}; retrying in ${retryAfterMs}ms`);
-    await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
-    return attempt();
+  } catch {
+    /* Preserve the run cancellation even if a provider stream rejects cleanup. */
   }
 }
 
@@ -173,7 +193,8 @@ async function collectSkillUploadFiles(
   params: PrimeSkillFilesParams,
   inspectedBuffers: ReadonlyMap<SkillFileRecord, Buffer>,
 ): Promise<SkillUploadFiles> {
-  const { skill, skillFiles, req, getStrategyFunctions } = params;
+  const { skill, skillFiles, req, getStrategyFunctions, signal } = params;
+  signal?.throwIfAborted();
   const filesToUpload: SkillUploadFiles = [];
 
   // SKILL.md from the skill body
@@ -186,6 +207,7 @@ async function collectSkillUploadFiles(
   // Bundled files from storage (parallel stream acquisition)
   const streamResults = await Promise.allSettled(
     skillFiles.map(async (file) => {
+      signal?.throwIfAborted();
       const inspected = inspectedBuffers.get(file);
       if (inspected != null) {
         return {
@@ -200,10 +222,28 @@ async function collectSkillUploadFiles(
         );
         return null;
       }
-      const stream = await strategy.getDownloadStream(req, file.filepath);
+      const stream = await strategy.getDownloadStream(req, resolveDownloadPath(file), { signal });
+      if (signal?.aborted) {
+        destroySkillUploadStream(stream);
+        signal.throwIfAborted();
+      }
       return { stream, filename: `${SKILL_FILE_PREFIX}${skill.name}/${file.relativePath}` };
     }),
   );
+  /* Do not let allSettled turn foreground cancellation into a skipped bundle
+   * member. A partial skill upload can look successful while leaving required
+   * files unavailable to the sandbox. */
+  if (signal?.aborted) {
+    for (const file of filesToUpload) {
+      destroySkillUploadStream(file.stream);
+    }
+    for (const result of streamResults) {
+      if (result.status === 'fulfilled' && result.value) {
+        destroySkillUploadStream(result.value.stream);
+      }
+    }
+    signal.throwIfAborted();
+  }
   for (const result of streamResults) {
     if (result.status === 'fulfilled' && result.value) {
       filesToUpload.push(result.value);
@@ -310,10 +350,14 @@ function throwIfStoredSkillFileMustBeInspectable(req: ServerRequest): void {
   }
 }
 
-async function bufferSkillFileStream(stream: NodeJS.ReadableStream): Promise<Buffer | null> {
+async function bufferSkillFileStream(
+  stream: NodeJS.ReadableStream,
+  signal?: AbortSignal,
+): Promise<Buffer | null> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of stream as AsyncIterable<Uint8Array | string>) {
+    signal?.throwIfAborted();
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.length;
     if (bytes > MAX_INSPECTABLE_SKILL_FILE_BYTES) {
@@ -321,6 +365,7 @@ async function bufferSkillFileStream(stream: NodeJS.ReadableStream): Promise<Buf
     }
     chunks.push(buffer);
   }
+  signal?.throwIfAborted();
   return Buffer.concat(chunks);
 }
 
@@ -335,8 +380,8 @@ async function bufferSkillFileStream(stream: NodeJS.ReadableStream): Promise<Buf
  * documents for future freshness checks.
  *
  * Rate-limit resilience: concurrent primes of the same (skill, version)
- * share one flight, uploads are bounded process-wide, and a 429 retries
- * once per the server's Retry-After.
+ * share one flight, uploads are bounded per Code API route and principal,
+ * and 429 responses retry within a capped wait budget.
  */
 export async function primeSkillFiles(
   params: PrimeSkillFilesParams,
@@ -350,7 +395,9 @@ export async function primeSkillFiles(
   const executionRouteKey = params.codeExecutionContext
     ? getCodeExecutionRouteKey(params.codeExecutionContext)
     : 'default';
-  const flightKey = `${executionRouteKey}:${params.skill._id}:v:${params.skill.version}`;
+  /* A flight may share cancellation only with callers from the same run.
+   * Cross-run sharing would let one user's Stop abort another live request. */
+  const flightKey = `${executionRouteKey}:${params.skill._id}:v:${params.skill.version}:run:${getSignalScope(params.signal)}`;
   const inflight = inflightPrimes.get(flightKey);
   if (inflight) {
     return inflight;
@@ -375,7 +422,10 @@ async function executePrimeSkillFiles(
     checkIfActive,
     updateSkillFileCodeEnvIds,
     codeExecutionContext,
+    rateLimitBudget,
+    signal,
   } = params;
+  signal?.throwIfAborted();
   const executionProfile = codeExecutionContext?.executionProfile ?? 'default';
   const executionRouteKey = codeExecutionContext
     ? getCodeExecutionRouteKey(codeExecutionContext)
@@ -388,51 +438,64 @@ async function executePrimeSkillFiles(
 
   if (inspectStoredMetadata) {
     for (const file of skillFiles) {
+      signal?.throwIfAborted();
       assertStoredSkillFileNameAllowed(file, req);
     }
   }
 
   if (inspectBundledFileContent) {
-    for (const file of skillFiles) {
-      if (file.bytes > MAX_INSPECTABLE_SKILL_FILE_BYTES) {
-        throwIfStoredSkillFileMustBeInspectable(req);
-        continue;
-      }
-      try {
-        const strategy = getStrategyFunctions(file.source);
-        if (!strategy.getDownloadStream) {
+    await mapWithConcurrency(
+      skillFiles,
+      getLookupConcurrency(req.config, 'skillFileInspections'),
+      async (file) => {
+        signal?.throwIfAborted();
+        if (file.bytes > MAX_INSPECTABLE_SKILL_FILE_BYTES) {
           throwIfStoredSkillFileMustBeInspectable(req);
-          logger.warn('[primeSkillFiles] No download stream for stored skill file');
-          continue;
+          return;
         }
-        const sourceStream = await strategy.getDownloadStream(req, file.filepath);
-        const buffer = await bufferSkillFileStream(sourceStream);
-        if (buffer == null) {
+        try {
+          const strategy = getStrategyFunctions(file.source);
+          if (!strategy.getDownloadStream) {
+            throwIfStoredSkillFileMustBeInspectable(req);
+            logger.warn('[primeSkillFiles] No download stream for stored skill file');
+            return;
+          }
+          const sourceStream = await strategy.getDownloadStream(req, resolveDownloadPath(file), {
+            signal,
+          });
+          const buffer = await bufferSkillFileStream(sourceStream, signal);
+          if (buffer == null) {
+            throwIfStoredSkillFileMustBeInspectable(req);
+            return;
+          }
+          assertStoredSkillFileAllowed(file, buffer, req);
+          inspectedBuffers.set(file, buffer);
+        } catch (error) {
+          if (isAbortError(error)) {
+            throw error;
+          }
+          if (isContentFilterError(error)) {
+            throw error;
+          }
           throwIfStoredSkillFileMustBeInspectable(req);
-          continue;
+          logger.error('[primeSkillFiles] Failed to inspect bundled file before use');
         }
-        assertStoredSkillFileAllowed(file, buffer, req);
-        inspectedBuffers.set(file, buffer);
-      } catch (error) {
-        if (isContentFilterError(error)) {
-          throw error;
-        }
-        throwIfStoredSkillFileMustBeInspectable(req);
-        logger.error('[primeSkillFiles] Failed to inspect bundled file before use');
-      }
-    }
+      },
+    );
   }
 
   /* Cache-hit path: every skillFile carries a `codeEnvRef` from the
    * previous prime. Check freshness against codeapi for every distinct
    * storage session; if all are still active, reuse without
    * re-uploading. The skill version is part of the ref — when the
-   * skill is edited, the upsert clears the ref and forces a fresh
-   * upload on the next prime. */
+   * skill version has been bumped (e.g. by a SKILL.md edit), stale
+   * refs are treated as cache misses and the files are re-uploaded
+   * under the new version's session key. */
   if (getSessionInfo && checkIfActive && skillFiles.length > 0) {
-    const allHaveRefs = skillFiles.every(
-      (sf) => getCodeEnvRefForProfile(sf, executionRouteKey) !== undefined,
-    );
+    const allHaveRefs = skillFiles.every((sf) => {
+      const ref = getCodeEnvRefForProfile(sf, executionRouteKey);
+      return isCurrentSkillRef(ref, skill.version);
+    });
     if (allHaveRefs) {
       const refsBySession = new Map<string, CodeEnvRef>();
       for (const sf of skillFiles) {
@@ -445,10 +508,11 @@ async function executePrimeSkillFiles(
       try {
         const checkResults = await Promise.all(
           Array.from(refsBySession.values()).map(async (ref) => {
-            const lastModified = await getSessionInfo(ref, req, codeExecutionContext);
+            const lastModified = await getSessionInfo(ref, req, codeExecutionContext, signal);
             return !!(lastModified && checkIfActive(lastModified));
           }),
         );
+        signal?.throwIfAborted();
         const allActive = checkResults.every(Boolean);
 
         if (allActive) {
@@ -480,7 +544,10 @@ async function executePrimeSkillFiles(
             return { storage_session_id: files[0].storage_session_id, files };
           }
         }
-      } catch {
+      } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
         // Session check failed — fall through to re-upload
       }
     }
@@ -488,12 +555,20 @@ async function executePrimeSkillFiles(
 
   const entityId = skill._id.toString();
   try {
-    /* Streams open inside the slot (not while queued) and inside the retry
-     * closure (a failed attempt consumes them). The slot bounds concurrent
-     * uploads process-wide across both prime call sites. */
-    const uploaded = await uploadSlots(() =>
-      retryOn429(async () => {
-        const filesToUpload = await collectSkillUploadFiles(params, inspectedBuffers);
+    const uploadOptions = getCodeApiUploadOptions(req, executionRouteKey);
+    const uploaded = await withCodeApiUploadRecovery({
+      registry: req.app.locals.codeApiUploadRegistry,
+      scope: uploadOptions.scope,
+      concurrency: uploadOptions.concurrency,
+      label: `priming skill "${skill.name}"`,
+      budget: rateLimitBudget ?? createCodeApiRateLimitBudget(uploadOptions.retryWaitMs),
+      signal,
+      onWait: (waitMs) =>
+        logger.warn(
+          `[primeSkillFiles] Rate-limited priming skill "${skill.name}"; retrying in ${waitMs}ms`,
+        ),
+      openSource: () => collectSkillUploadFiles(params, inspectedBuffers),
+      upload: async (filesToUpload) => {
         if (filesToUpload.length === 0) {
           return null;
         }
@@ -503,7 +578,7 @@ async function executePrimeSkillFiles(
           /* Resource identity for codeapi's sessionKey: skill files share
            * cross-user-within-tenant under `<tenant>:skill:<id>:v:<version>`.
            * Bumping `skill.version` on edit naturally invalidates the prior
-           * cache entry under the new sessionKey. */
+           * cache entry under the new version's sessionKey. */
           kind: 'skill',
           id: entityId,
           version: skill.version,
@@ -517,10 +592,12 @@ async function executePrimeSkillFiles(
           read_only: true,
           codeApiBaseUrl: codeExecutionContext?.baseUrl,
           executionProfile: codeExecutionContext?.executionProfile,
+          bridgeWorkerId: codeExecutionContext?.bridgeWorkerId,
+          signal,
         });
         return { filesToUpload, result };
-      }, `skill "${skill.name}"`),
-    );
+      },
+    });
     if (uploaded == null) {
       return null;
     }
@@ -607,6 +684,9 @@ async function executePrimeSkillFiles(
 
     return { storage_session_id: result.storage_session_id, files };
   } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     logger.error('[primeSkillFiles] Batch upload failed', getSafeErrorMetadata(error));
     return null;
   }
@@ -614,6 +694,8 @@ async function executePrimeSkillFiles(
 
 export interface PrimeInvokedSkillsDeps {
   req: ServerRequest;
+  /** Effective cancellation signal for the historical priming operation. */
+  signal?: AbortSignal;
   /** Raw message payload (before formatAgentMessages). Used to extract invoked skill names. */
   payload?: Array<Partial<{ role: string; content: unknown }>>;
   /** Explicit durable names used by a validated event-actor preflight. */
@@ -641,6 +723,7 @@ export interface PrimeInvokedSkillsDeps {
   checkIfActive?: PrimeSkillFilesParams['checkIfActive'];
   updateSkillFileCodeEnvIds?: PrimeSkillFilesParams['updateSkillFileCodeEnvIds'];
   codeExecutionContext?: PrimeSkillFilesParams['codeExecutionContext'];
+  rateLimitBudget?: CodeApiRateLimitBudget;
 }
 
 export interface PrimeInvokedSkillsResult {
@@ -753,12 +836,16 @@ export async function primeInvokedSkills(
     if (!inspectStoredSkillFileContent && deps.getSessionInfo && deps.checkIfActive) {
       const allResolved = fileListResults.flatMap((r) =>
         r.files.map((f) => ({
+          skill: r.skill,
           skillName: r.skill.name,
           file: f,
           ref: getCodeEnvRefForProfile(f, executionRouteKey),
         })),
       );
-      const resolvedWithRef = allResolved.filter((x) => x.ref !== undefined);
+      const resolvedWithRef = allResolved.filter(
+        (entry): entry is typeof entry & { ref: SkillCodeEnvRef } =>
+          isCurrentSkillRef(entry.ref, entry.skill.version),
+      );
 
       // Only use cache when ALL files have refs (no partial persistence)
       if (resolvedWithRef.length > 0 && resolvedWithRef.length === allResolved.length) {
@@ -776,13 +863,19 @@ export async function primeInvokedSkills(
                 ref,
                 deps.req,
                 deps.codeExecutionContext,
+                deps.signal,
               );
+              deps.signal?.throwIfAborted();
               return !!(lastModified && deps.checkIfActive?.(lastModified));
-            } catch {
+            } catch (error) {
+              if (isAbortError(error)) {
+                throw error;
+              }
               return false;
             }
           }),
         );
+        deps.signal?.throwIfAborted();
         const allActive = checkResults.every(Boolean);
 
         if (allActive) {
@@ -839,6 +932,9 @@ export async function primeInvokedSkills(
       kind: 'skill';
       version: number;
     }> = [];
+    const uploadOptions = getCodeApiUploadOptions(deps.req, executionRouteKey);
+    const rateLimitBudget =
+      deps.rateLimitBudget ?? createCodeApiRateLimitBudget(uploadOptions.retryWaitMs);
     const primeResults = await Promise.allSettled(
       fileListResults.map(async ({ skill, files }) => {
         const result = await primeSkillFiles({
@@ -851,6 +947,8 @@ export async function primeInvokedSkills(
           checkIfActive: deps.checkIfActive,
           updateSkillFileCodeEnvIds: deps.updateSkillFileCodeEnvIds,
           codeExecutionContext: deps.codeExecutionContext,
+          rateLimitBudget,
+          signal: deps.signal,
         });
         return { skill, result };
       }),
@@ -871,7 +969,7 @@ export async function primeInvokedSkills(
           });
         }
       } else if (r.status === 'rejected') {
-        if (isContentFilterError(r.reason)) {
+        if (isContentFilterError(r.reason) || isAbortError(r.reason)) {
           throw r.reason;
         }
         logger.warn(
@@ -916,6 +1014,10 @@ export async function primeInvokedSkillsForProfiles(
     return primeInvokedSkills({ ...deps, codeEnvAvailable: false });
   }
 
+  const rateLimitBudget = createCodeApiRateLimitBudget(
+    deps.req.config?.endpoints?.agents?.codeApiMaxRetryWaitMs,
+  );
+
   const profileResults = await Promise.all(
     deps.executionProfiles.map(async (profile) => ({
       profile,
@@ -924,6 +1026,8 @@ export async function primeInvokedSkillsForProfiles(
         codeEnvAvailable: true,
         codeExecutionContext: profile.codeExecutionContext,
         updateSkillFileCodeEnvIds: deps.updateSkillFileCodeEnvIds,
+        rateLimitBudget,
+        signal: deps.signal,
       }),
     })),
   );

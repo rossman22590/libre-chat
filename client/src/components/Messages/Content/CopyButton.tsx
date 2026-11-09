@@ -1,5 +1,5 @@
 import React from 'react';
-import { Copy } from 'lucide-react';
+import { Copy } from 'lucide';
 import ActionButton from '~/components/Messages/Content/ActionButton';
 import { useLocalize } from '~/hooks';
 
@@ -12,11 +12,22 @@ interface CopyButtonProps {
   label?: string;
   copiedLabel?: string;
   portalElement?: HTMLElement | null;
+  disabled?: boolean;
 }
 
 const CopyButton = React.forwardRef<HTMLButtonElement, CopyButtonProps>(
   (
-    { isCopied, iconOnly = false, onClick, tabIndex, className, label, copiedLabel, portalElement },
+    {
+      isCopied,
+      iconOnly = false,
+      onClick,
+      tabIndex,
+      className,
+      label,
+      copiedLabel,
+      portalElement,
+      disabled,
+    },
     ref,
   ) => {
     const localize = useLocalize();
@@ -33,6 +44,7 @@ const CopyButton = React.forwardRef<HTMLButtonElement, CopyButtonProps>(
         tabIndex={tabIndex}
         className={className}
         portalElement={portalElement}
+        disabled={disabled}
       />
     );
   },

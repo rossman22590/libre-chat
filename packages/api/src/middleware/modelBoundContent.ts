@@ -26,6 +26,8 @@ import type {
 } from '../protection/adapters/nested';
 import type { JsonPointer, TextContentFragment } from '../protection/types';
 import type { ExternalChatMessage } from '../protection/adapters/messages';
+import type { LocatorTraversalReporter } from '../protection/diagnostics';
+import type { ConfiguredContentInspector } from '../protection/runtime';
 import type { CanonicalFileInspectionFile } from '../protection/files';
 import {
   CONTENT_TRAVERSAL_MAX_DEPTH,
@@ -68,6 +70,7 @@ import { extractMessageContent, snapshotExternalMessages } from '../protection/a
 import { ContentTraversalLimitError } from '../protection/adapters/nested';
 import { ContentFilterError, isContentFilterError } from './contentFilter';
 import { createConfiguredContentInspector } from '../protection/runtime';
+import { aggregateAuditFindingsSync } from '../protection/audit';
 
 export type ModelBoundProviderAttribution = 'user' | 'model' | 'tool' | 'synthetic';
 
@@ -165,6 +168,7 @@ function getProviderPartSnapshotTraversalScopes(
 interface ProviderProjectionWorkBudget {
   remaining: number;
   overflowed: boolean;
+  parent?: ProviderProjectionWorkBudget;
 }
 
 interface ProviderProjectionWorkBudgets {
@@ -175,6 +179,35 @@ interface ProviderProjectionWorkBudgets {
   readonly provenance: ProviderProjectionWorkBudget;
   readonly storedState: ProviderProjectionWorkBudget;
   readonly nestedTraversal: VisitNestedStringsBudget;
+}
+
+/**
+ * JSON structure is bounded per message. Dynamic proxy arrays retain the
+ * shared work ceiling; their reads can execute arbitrary code. Either budget
+ * latches failures into the enclosing projection, including subsequent batches.
+ */
+function createMessageWorkBudget(
+  parent: ProviderProjectionWorkBudget,
+  candidate: unknown,
+  remaining = MAX_PROVIDER_PROJECTION_WORK,
+): ProviderProjectionWorkBudget {
+  if (isProxy(candidate)) {
+    return parent;
+  }
+  let overflowed = false;
+  return {
+    remaining,
+    parent,
+    get overflowed() {
+      return overflowed;
+    },
+    set overflowed(value: boolean) {
+      overflowed ||= value;
+      if (value && this.parent != null) {
+        this.parent.overflowed = true;
+      }
+    },
+  };
 }
 
 function captureProviderArrayLength(candidate: readonly unknown[]): number {
@@ -228,8 +261,11 @@ class FatalModelBoundPolicyError extends StreamLimitExceededError {
 }
 
 export interface ModelBoundProviderContentInput {
+  readonly onTraversalFailure?: LocatorTraversalReporter;
   readonly filters?: FiltersConfig;
   readonly legacyPii?: MessageFilterPiiConfig;
+  /** Exact generated tokens from server-owned canonical user rows, never request metadata. */
+  readonly privateTextTokens?: ReadonlySet<string>;
   readonly providerMessages: readonly ModelBoundProviderMessage[];
   readonly storedMessages?: readonly (StoredModelBoundMessage | null | undefined)[];
   readonly resolvedFiles?: readonly (ModelBoundCanonicalFile | null | undefined)[];
@@ -343,9 +379,10 @@ export function collectModelBoundHistoricalFileIdState(
         continue;
       }
       const contentCount = captureProviderArrayLength(contentCandidate);
+      const contentBudget = createMessageWorkBudget(budget, contentCandidate);
       let contentIndex = 0;
       for (; contentIndex < contentCount; contentIndex++) {
-        if (!consumeProviderProjectionWork(budget, 1)) {
+        if (!consumeProviderProjectionWork(contentBudget, 1)) {
           break;
         }
         const part = contentCandidate[contentIndex];
@@ -644,7 +681,12 @@ export interface ModelBoundChatModelCallback {
   readonly handleChatModelStart: (
     llm: object | undefined,
     messageBatches: readonly (readonly ModelBoundProviderMessage[])[],
-  ) => void;
+    runId?: string,
+    parentRunId?: string,
+    extraParams?: Record<string, unknown>,
+    tags?: string[],
+    metadata?: Record<string, unknown>,
+  ) => void | Promise<void>;
 }
 
 export interface InitialModelBoundAdmissionCallback {
@@ -687,8 +729,11 @@ export interface InitialModelBoundAdmission {
 }
 
 export interface ModelBoundContentInput {
+  readonly onTraversalFailure?: LocatorTraversalReporter;
   readonly filters?: FiltersConfig;
   readonly legacyPii?: MessageFilterPiiConfig;
+  /** Exact generated tokens from server-owned canonical user rows, never request metadata. */
+  readonly privateTextTokens?: ReadonlySet<string>;
   /** Fresh API input: every role is caller-submitted. */
   readonly submittedMessages?: readonly ModelBoundMessage[];
   /** Persisted chat history: user rows plus structured tool fragments are re-inspected. */
@@ -1044,7 +1089,7 @@ function normalizeProviderSourceMessageId(candidate: unknown): string | undefine
 
 function getProviderMessageProvenanceState(
   message: ModelBoundProviderMessage,
-  budget: ProviderProjectionWorkBudget,
+  parentBudget: ProviderProjectionWorkBudget,
 ): ModelBoundProviderProvenanceState {
   const candidate: unknown = message.additional_kwargs?.provenance;
   if (candidate == null) {
@@ -1059,6 +1104,11 @@ function getProviderMessageProvenanceState(
   if (version !== 1 || !Array.isArray(candidateParts)) {
     return { invalid: true };
   }
+  const budget = createMessageWorkBudget(
+    parentBudget,
+    candidateParts,
+    MAX_PROVIDER_PROVENANCE_PARSE_WORK,
+  );
   let candidatePartCount: number;
   try {
     candidatePartCount = captureProviderArrayLength(candidateParts);
@@ -1130,7 +1180,12 @@ function getProviderMessageProvenanceState(
       if (totalIndexRefs > MAX_PROVIDER_PROVENANCE_INDEX_REFS) {
         return { invalid: true };
       }
-      if (!consumeProviderProjectionWork(budget, candidateIndexCount)) {
+      if (
+        !consumeProviderProjectionWork(
+          isProxy(candidateSourceContentPartIndices) ? parentBudget : budget,
+          candidateIndexCount,
+        )
+      ) {
         return { invalid: true };
       }
       sourceContentPartIndices = new Set<number>();
@@ -1186,12 +1241,17 @@ function getProviderMessageProvenanceState(
 
 function getLegacyProviderLineage(
   message: ModelBoundProviderMessage,
-  budget: ProviderProjectionWorkBudget,
+  parentBudget: ProviderProjectionWorkBudget,
 ): LegacyProviderLineage {
   const sourceIds = new Set<string>();
   let invalid = false;
   let hasPluralLineage = false;
   const pluralCandidate: unknown = message.additional_kwargs?.sourceMessageIds;
+  const budget = createMessageWorkBudget(
+    parentBudget,
+    pluralCandidate,
+    MAX_PROVIDER_PROVENANCE_PARSE_WORK,
+  );
   if (pluralCandidate != null) {
     if (!Array.isArray(pluralCandidate)) {
       invalid = true;
@@ -1475,9 +1535,10 @@ function appendStoredMessageFileIds(
       return;
     }
     const contentCount = captureProviderArrayLength(contentCandidate);
+    const contentBudget = createMessageWorkBudget(budget, contentCandidate);
     let index = 0;
     for (; index < contentCount; index++) {
-      if (!consumeProviderProjectionWork(budget, 1)) {
+      if (!consumeProviderProjectionWork(contentBudget, 1)) {
         break;
       }
       const part = contentCandidate[index];
@@ -1544,6 +1605,7 @@ function snapshotModelBoundPartArray(
   try {
     if (isProxy(candidate)) {
       markProviderProjectionWorkOverflow(context.budget);
+      return snapshot;
     }
     const length = captureProviderArrayLength(candidate);
     let index = 0;
@@ -1868,9 +1930,11 @@ function snapshotProviderMessageEnvelope(
 
 function snapshotProviderMessageContent(
   message: ModelBoundProviderMessage,
-  budget: ProviderProjectionWorkBudget,
-  partSnapshotBudget: ProviderProjectionWorkBudget,
+  parentBudget: ProviderProjectionWorkBudget,
+  parentPartSnapshotBudget: ProviderProjectionWorkBudget,
 ): unknown {
+  const budget = createMessageWorkBudget(parentBudget, message.content);
+  const partSnapshotBudget = createMessageWorkBudget(parentPartSnapshotBudget, message.content);
   try {
     const messageContent = message.content;
     const messageText = messageContent == null ? message.text : undefined;
@@ -1965,7 +2029,7 @@ function projectProviderMessage(
 
 function projectStoredMessageForProvider(
   message: StoredModelBoundMessage,
-  budget: ProviderProjectionWorkBudget,
+  parentBudget: ProviderProjectionWorkBudget,
   partSnapshotBudget: ProviderProjectionWorkBudget,
   selectedContentPartIndices?: ReadonlySet<number>,
   attribution?: Extract<ProviderExactAttribution, 'user' | 'tool'>,
@@ -1974,6 +2038,7 @@ function projectStoredMessageForProvider(
   submittedPathsSnapshot?: readonly string[],
   submittedFieldPathsSnapshot?: readonly UserSubmittedMessageFieldPath[],
 ): StoredModelBoundMessage {
+  const budget = createMessageWorkBudget(parentBudget, message.content);
   const messageContentCandidate = message.content;
   const storedText = message.text;
   const rawFieldPathCandidate = message.userSubmittedMessageFieldPaths;
@@ -2173,6 +2238,7 @@ interface StoredProviderContributionState {
 }
 
 interface CachedStoredProviderState {
+  readonly provenanceBudget: ProviderProjectionWorkBudget;
   readonly messageSnapshot: StoredModelBoundMessage;
   readonly contentLength?: number;
   readonly contentParts: Map<number, unknown>;
@@ -2251,9 +2317,10 @@ function getStoredSubmittedPathState(
     return cachedState.explicitSubmittedPathState;
   }
   if (cachedState.wholeSubmittedPathState == null) {
+    const semanticBudget = createMessageWorkBudget(budget, cachedState.messageSnapshot.content);
     const semanticState = getUserSubmittedPathState(cachedState.messageSnapshot, {
       includeExplicitPaths: false,
-      budget,
+      budget: semanticBudget,
       capturedContent: cachedState.messageSnapshot.content,
       hasCapturedContent: true,
       capturedContentLength: cachedState.contentLength,
@@ -2335,8 +2402,9 @@ function getStoredProviderContributionState(
   let hasSelectedMaterial = selectedContentPartIndices == null;
   let hasSelectedSemanticPath = false;
   if (!hasSelectedMaterial && cachedState.contentLength != null) {
+    const selectionBudget = createMessageWorkBudget(budget, cachedState.messageSnapshot.content);
     for (const index of selectedContentPartIndices ?? []) {
-      if (!consumeProviderProjectionWork(budget, 1)) {
+      if (!consumeProviderProjectionWork(selectionBudget, 1)) {
         break;
       }
       const part = readCachedStoredContentPart(cachedState, index, budget);
@@ -2398,8 +2466,9 @@ function getSelectedRawStoredMessageFileIds(
       if (cachedState.contentLength != null) {
         const contentLength = cachedState.contentLength;
         const contentCount = Math.min(contentLength, MAX_PROVIDER_PROJECTION_WORK);
+        const contentBudget = createMessageWorkBudget(budget, cachedState.messageSnapshot.content);
         for (let index = 0; index < contentCount; index++) {
-          if (!consumeProviderProjectionWork(budget, 1)) {
+          if (!consumeProviderProjectionWork(contentBudget, 1)) {
             break;
           }
           const part = readCachedStoredContentPart(cachedState, index, budget);
@@ -2428,8 +2497,9 @@ function getSelectedRawStoredMessageFileIds(
     if (cachedState.contentLength == null) {
       return fileIds;
     }
+    const selectionBudget = createMessageWorkBudget(budget, cachedState.messageSnapshot.content);
     for (const index of selectedContentPartIndices) {
-      if (!consumeProviderProjectionWork(budget, 1)) {
+      if (!consumeProviderProjectionWork(selectionBudget, 1)) {
         break;
       }
       const part = readCachedStoredContentPart(cachedState, index, budget);
@@ -2518,13 +2588,24 @@ interface ModelBoundProviderContentIndex {
 function getCachedStoredProviderState(
   index: ModelBoundProviderContentIndex,
   message: StoredModelBoundMessage,
-  budget: ProviderProjectionWorkBudget,
-  partSnapshotBudget: ProviderProjectionWorkBudget,
+  parentBudget: ProviderProjectionWorkBudget,
+  parentPartSnapshotBudget: ProviderProjectionWorkBudget,
 ): CachedStoredProviderState {
   const cached = index.storedStateByMessage.get(message);
   if (cached != null) {
+    /** Cached snapshots outlive a model invocation; attach failures to the current budgets. */
+    cached.provenanceBudget.parent = parentBudget;
+    if (cached.provenanceBudget.overflowed) {
+      markProviderProjectionWorkOverflow(parentBudget);
+    }
+    cached.partSnapshotBudget.parent = parentPartSnapshotBudget;
+    if (cached.partSnapshotBudget.overflowed) {
+      markProviderProjectionWorkOverflow(parentPartSnapshotBudget);
+    }
     return cached;
   }
+  const budget = createMessageWorkBudget(parentBudget, undefined, MAX_PROVIDER_STORED_STATE_WORK);
+  const partSnapshotBudget = createMessageWorkBudget(parentPartSnapshotBudget, undefined);
   let messageSnapshot: StoredModelBoundMessage = {};
   try {
     messageSnapshot = {
@@ -2561,8 +2642,13 @@ function getCachedStoredProviderState(
     contentLength = -1;
   }
   const contentParts = new Map<number, unknown>();
+  const pathBudget =
+    isProxy(messageSnapshot.userSubmittedPaths) ||
+    isProxy(messageSnapshot.userSubmittedMessageFieldPaths)
+      ? parentBudget
+      : budget;
   const provenanceOptions = {
-    budget,
+    budget: pathBudget,
     capturedContent: messageSnapshot.content,
     hasCapturedContent: true,
     capturedContentLength: contentLength,
@@ -2577,10 +2663,11 @@ function getCachedStoredProviderState(
     messageSnapshot,
     provenanceOptions,
   );
-  if (explicitSubmittedPathState.overflowed) {
+  if (explicitSubmittedPathState.overflowed || pathBudget.overflowed) {
     markProviderProjectionWorkOverflow(budget);
   }
   const state: CachedStoredProviderState = {
+    provenanceBudget: budget,
     messageSnapshot,
     contentLength,
     contentParts,
@@ -2746,7 +2833,7 @@ function projectModelBoundProviderContent(
       projectStoredMessageForProvider(
         cachedState.messageSnapshot,
         projectionBudget,
-        partSnapshotBudget,
+        cachedState.partSnapshotBudget,
         undefined,
         undefined,
         cachedState.contentParts,
@@ -2843,7 +2930,7 @@ function projectModelBoundProviderContent(
               projectStoredMessageForProvider(
                 cachedState.messageSnapshot,
                 projectionBudget,
-                partSnapshotBudget,
+                cachedState.partSnapshotBudget,
                 contribution.selectedContentPartIndices,
                 exactAttribution,
                 cachedState.contentParts,
@@ -3065,8 +3152,10 @@ function assertIndexedModelBoundProviderContent(
   const resolvedWorkBudgets = workBudgets ?? createProviderProjectionWorkBudgets(index);
   const projection = projectModelBoundProviderContent(input, index, resolvedWorkBudgets);
   assertModelBoundContent({
+    onTraversalFailure: input.onTraversalFailure,
     filters: input.filters,
     legacyPii: input.legacyPii,
+    privateTextTokens: input.privateTextTokens,
     storedMessages: projection.storedMessages,
     resolvedFiles: projection.resolvedFiles,
     deferredTraversalErrors: projection.deferredTraversalErrors,
@@ -3154,14 +3243,23 @@ function snapshotBoundedSourceFileIds(
 /** Creates a run-stable callback shared by root, summary, and subagent model clients. */
 export function createModelBoundChatModelCallback(
   input: Omit<ModelBoundProviderContentInput, 'providerMessages'>,
-  options: { readonly onContentRejected?: (error: unknown) => void } = {},
+  options: {
+    readonly onContentRejected?: (error: unknown) => void;
+    readonly onContentAllowed?: (context: {
+      runId?: string;
+      parentRunId?: string;
+      metadata?: Record<string, unknown>;
+    }) => void | Promise<void>;
+  } = {},
 ): ModelBoundChatModelCallback {
   const storedMessageSnapshot = snapshotBoundedProviderArray(input.storedMessages);
   const resolvedFileSnapshot = snapshotBoundedProviderArray(input.resolvedFiles);
   const sourceFileIdSnapshot = snapshotBoundedSourceFileIds(input.fileIdsBySourceMessageId);
   const stableInput = {
+    onTraversalFailure: input.onTraversalFailure,
     filters: input.filters,
     legacyPii: input.legacyPii,
+    privateTextTokens: input.privateTextTokens,
     storedMessages: storedMessageSnapshot.values,
     resolvedFiles: resolvedFileSnapshot.values,
     fileIdsBySourceMessageId: sourceFileIdSnapshot.values,
@@ -3180,6 +3278,11 @@ export function createModelBoundChatModelCallback(
     handleChatModelStart: (
       _llm: object | undefined,
       messageBatches: readonly (readonly ModelBoundProviderMessage[])[],
+      runId?: string,
+      parentRunId?: string,
+      _extraParams?: Record<string, unknown>,
+      _tags?: string[],
+      metadata?: Record<string, unknown>,
     ) => {
       let messageBatchCount = 0;
       let messageBatchesOverflowed = false;
@@ -3237,6 +3340,7 @@ export function createModelBoundChatModelCallback(
         options.onContentRejected?.(error);
         throw new FatalModelBoundPolicyError(error);
       }
+      return options.onContentAllowed?.({ runId, parentRunId, metadata });
     },
   });
   return callback;
@@ -3393,21 +3497,48 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
     filters: input.filters,
     legacyPii: input.legacyPii,
   });
+  if (inspector?.hasAuditRules !== true) {
+    inspectModelBoundContent(input, inspector);
+    return;
+  }
+  aggregateAuditFindingsSync(() => inspectModelBoundContent(input, inspector));
+}
+
+function inspectModelBoundContent(
+  input: ModelBoundContentInput,
+  inspector: ConfiguredContentInspector | null,
+): void {
   const hasFileFailClose =
     getBlockedUninspectableFileField(input.filters, FILE_FILTER_FIELDS) != null;
   if (inspector == null && !hasFileFailClose) {
     return;
   }
   const inspectionSession = inspector?.createSession();
+  const shouldContinueAfterFinding = inspectionSession?.hasAuditRules === true;
   let finding: ReturnType<NonNullable<typeof inspectionSession>['inspect']> = null;
-  const inspectFragments = (fragments: Iterable<TextContentFragment>): void => {
-    if (finding == null) {
-      finding = inspectionSession?.inspect(fragments) ?? null;
-    }
-  };
   const inspectFragment = (fragment: TextContentFragment): void => {
-    if (finding == null) {
-      finding = inspectionSession?.inspectFragment(fragment) ?? null;
+    if (finding != null && !shouldContinueAfterFinding) {
+      return;
+    }
+    const inspectableText =
+      input.privateTextTokens?.size &&
+      (fragment.source === 'message' || fragment.source === 'assembled_context')
+        ? fragment.text.replace(
+            /\[(?:EMAIL|PHONE|NAME|CREDENTIAL|CUSTOM)_\d+_[a-f0-9]{32}\]/g,
+            (token) => (input.privateTextTokens!.has(token) ? '' : token),
+          )
+        : fragment.text;
+    const inspected =
+      inspectableText === fragment.text ? fragment : { ...fragment, text: inspectableText };
+    const nextFinding = inspectionSession?.inspectFragment(inspected) ?? null;
+    finding ??= nextFinding;
+  };
+  const inspectFragments = (fragments: Iterable<TextContentFragment>): void => {
+    for (const fragment of fragments) {
+      inspectFragment(fragment);
+      if (finding != null && !shouldContinueAfterFinding) {
+        return;
+      }
     }
   };
   const traversalErrors: ContentTraversalLimitError[] = [
@@ -3514,7 +3645,6 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
       appendSubmittedTraversalError(error);
     }
   }
-  const storedUserMessages: StoredModelBoundMessage[] = [];
   let aggregateStoredTraversalErrorAdded = false;
   const appendStoredTraversalError = (error: ContentTraversalLimitError): void => {
     if (
@@ -3532,6 +3662,18 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
     traversalErrors.push(error);
   };
   for (const message of input.storedMessages ?? []) {
+    /** Structural limits belong to the message; assembled-text allocations remain request-wide. */
+    const messageTraversalBudget: VisitNestedStringsBudget = {
+      visitedNodes: 0,
+      maxNodes: MAX_MODEL_BOUND_NESTED_TRAVERSAL_WORK,
+      get materializedCharacters() {
+        return storedMessageTraversalBudget.materializedCharacters;
+      },
+      set materializedCharacters(value: number | undefined) {
+        storedMessageTraversalBudget.materializedCharacters = value;
+      },
+      maxMaterializedCharacters: storedMessageTraversalBudget.maxMaterializedCharacters,
+    };
     const submittedPathState = getUserSubmittedPathState(message);
     const submittedMessageFieldState = getUserSubmittedMessageFieldPathState(message);
     const semanticUserSubmittedPaths = submittedMessageFieldState.entries.map(
@@ -3553,7 +3695,7 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
     let messageFragments: readonly TextContentFragment[];
     let traversalError: ContentTraversalLimitError | null = null;
     try {
-      messageFragments = extractStoredMessageContent(message, storedMessageTraversalBudget);
+      messageFragments = extractStoredMessageContent(message, messageTraversalBudget);
     } catch (error) {
       if (!isContentTraversalLimitError(error)) {
         throw error;
@@ -3579,7 +3721,7 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
         const exactMessageInspection = extractExactUserSubmittedMessageFragments(
           message,
           submittedMessageFieldState.entries,
-          storedMessageTraversalBudget,
+          messageTraversalBudget,
         );
         exactMessageFragments = exactMessageInspection.fragments;
         exactMessageTraversalError = exactMessageInspection.traversalError;
@@ -3608,7 +3750,10 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
       if (projectedMessage != null) {
         assertInspectableFileInput(
           input.filters,
-          omitResolvedCanonicalFileLocators(projectedMessage, resolvedFilesById),
+          omitResolvedCanonicalFileLocators(projectedMessage, resolvedFilesById, {
+            messageCount: input.storedMessages?.length ?? 0,
+            onTraversalFailure: input.onTraversalFailure,
+          }),
         );
       }
       /** Legacy unmarked assistant rows are treated as model-generated by
@@ -3616,17 +3761,17 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
        *  assistant row as submitted content. Structured tool calls/results
        *  remain externally sourced model-bound content. Explicit paths and
        *  semantic steer parts identify user-authored fragments in mixed rows. */
-      if (finding == null) {
+      if (finding == null || shouldContinueAfterFinding) {
         const submittedPathSet = new Set<string>(userSubmittedPaths);
         for (const fragment of messageFragments) {
           if (fragment.source === 'tool_argument') {
             inspectFragment(fragment);
-            if (finding != null) {
+            if (finding != null && !shouldContinueAfterFinding) {
               break;
             }
           }
         }
-        if (finding == null) {
+        if (finding == null || shouldContinueAfterFinding) {
           const submittedToolOutputs: Array<
             Extract<TextContentFragment, { source: 'tool_argument' }>
           > = [];
@@ -3637,7 +3782,7 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
             }
             if (fragment.source !== 'tool_argument') {
               inspectFragment(fragment);
-              if (finding != null) {
+              if (finding != null && !shouldContinueAfterFinding) {
                 break;
               }
             }
@@ -3651,25 +3796,25 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
               assembledText.push(fragment.text);
             }
           }
-          if (finding == null) {
+          if (finding == null || shouldContinueAfterFinding) {
             for (const fragment of submittedToolOutputs) {
               inspectFragment(asUserSubmittedMessageFragment(fragment));
-              if (finding != null) {
+              if (finding != null && !shouldContinueAfterFinding) {
                 break;
               }
             }
           }
-          if (finding == null) {
+          if (finding == null || shouldContinueAfterFinding) {
             inspectFragments(exactMessageFragments);
           }
           if (
-            finding == null &&
+            (finding == null || shouldContinueAfterFinding) &&
             (hasActivePiiPatterns(input.legacyPii) ||
               hasActivePiiFields(input.filters?.messages?.pii, ['assembled_context']))
           ) {
             const userSubmittedAssembledContext = createUserSubmittedAssembledContext(
               assembledText,
-              storedMessageTraversalBudget,
+              messageTraversalBudget,
             );
             if (userSubmittedAssembledContext.fragment != null) {
               inspectFragment(userSubmittedAssembledContext.fragment);
@@ -3703,7 +3848,13 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
       }
       continue;
     }
-    storedUserMessages.push(message);
+    assertInspectableFileInput(
+      input.filters,
+      omitResolvedCanonicalFileLocators(message, resolvedFilesById, {
+        messageCount: input.storedMessages?.length ?? 0,
+        onTraversalFailure: input.onTraversalFailure,
+      }),
+    );
     inspectFragments(messageFragments);
     inspectFragments(exactMessageFragments);
     if (
@@ -3718,10 +3869,6 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
       appendStoredTraversalError(traversalError);
     }
   }
-  assertInspectableFileInput(
-    input.filters,
-    omitResolvedCanonicalFileLocators(storedUserMessages, resolvedFilesById),
-  );
   for (const agent of input.agents ?? []) {
     const agentFilesById = new Map<string, ModelBoundCanonicalFile>();
     for (const file of getHydratedAgentFiles(agent)) {
@@ -3732,7 +3879,10 @@ export function assertModelBoundContent(input: ModelBoundContentInput): void {
     }
     assertInspectableFileInput(
       input.filters,
-      omitResolvedCanonicalFileLocators(agent, agentFilesById),
+      omitResolvedCanonicalFileLocators(agent, agentFilesById, {
+        onTraversalFailure: input.onTraversalFailure,
+        messageCount: input.storedMessages?.length ?? 0,
+      }),
     );
     appendExtractedContent(() => extractAgentContent(agent));
   }

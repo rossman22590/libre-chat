@@ -1,8 +1,11 @@
 import React from 'react';
 import { Label, InfoHoverCard, ESide } from '@librechat/client';
-import { getRefillEligibilityDate } from 'librechat-data-provider';
 
-import type { RefillIntervalUnit, TBalanceResponse } from 'librechat-data-provider';
+import type {
+  BalanceRefillMode,
+  RefillIntervalUnit,
+  TBalanceResponse,
+} from 'librechat-data-provider';
 import type { TranslationKeys } from '~/hooks';
 
 import { useLocalize, useClockFormat } from '~/hooks';
@@ -12,27 +15,30 @@ function ensureExhaustive(value: never): void {
 }
 
 interface AutoRefillSettingsProps {
+  refillMode?: BalanceRefillMode;
   lastRefill: NonNullable<TBalanceResponse['lastRefill']>;
-  refillAmount: number;
+  /** When the next refill becomes eligible — the same date the balance summary counts down to */
+  nextRefill: Date | null;
+  /** Formatted in the deployment's display mode; null hides the row (percent-only) */
+  refillAmount: string | null;
   refillIntervalUnit: RefillIntervalUnit;
   refillIntervalValue: number;
 }
 
 const AutoRefillSettings: React.FC<AutoRefillSettingsProps> = ({
+  refillMode = 'add',
   lastRefill,
+  nextRefill,
   refillAmount,
   refillIntervalUnit,
   refillIntervalValue,
 }) => {
   const localize = useLocalize();
   const hour12 = useClockFormat();
+  const reset = refillMode === 'reset';
 
   const lastRefillDate = lastRefill ? new Date(lastRefill) : null;
-  const refillEligibilityDate = lastRefillDate
-    ? getRefillEligibilityDate(lastRefillDate, refillIntervalValue, refillIntervalUnit)
-    : null;
-  const isRefillReady =
-    refillEligibilityDate != null && refillEligibilityDate.getTime() <= Date.now();
+  const isRefillReady = nextRefill != null && nextRefill.getTime() <= Date.now();
 
   const getLocalizedIntervalUnit = (value: number, unit: RefillIntervalUnit): string => {
     let key: TranslationKeys;
@@ -65,19 +71,25 @@ const AutoRefillSettings: React.FC<AutoRefillSettingsProps> = ({
 
   return (
     <div className="space-y-2">
-      <h3 className="font-medium text-text-primary">
-        {localize('com_nav_balance_auto_refill_settings')}
+      <h3 className="text-text-primary font-medium">
+        {localize(
+          reset ? 'com_nav_balance_auto_reset_settings' : 'com_nav_balance_auto_refill_settings',
+        )}
       </h3>
       <div className="mb-1 flex justify-between text-sm">
-        <span>{localize('com_nav_balance_last_refill')}</span>
+        <span>
+          {localize(reset ? 'com_nav_balance_last_reset' : 'com_nav_balance_last_refill')}
+        </span>
         <span>{lastRefillDate ? lastRefillDate.toLocaleString(undefined, { hour12 }) : '-'}</span>
       </div>
-      <div className="mb-1 flex justify-between text-sm">
-        <span>{localize('com_nav_balance_refill_amount')}</span>
-        <span className="tabular-nums">
-          {refillAmount !== undefined ? refillAmount.toLocaleString() : '-'}
-        </span>
-      </div>
+      {refillAmount != null && (
+        <div className="mb-1 flex justify-between text-sm">
+          <span>
+            {localize(reset ? 'com_nav_balance_reset_amount' : 'com_nav_balance_refill_amount')}
+          </span>
+          <span className="tabular-nums">{refillAmount}</span>
+        </div>
+      )}
       <div className="mb-1 flex justify-between text-sm">
         <span>{localize('com_nav_balance_interval')}</span>
         <span>
@@ -87,20 +99,25 @@ const AutoRefillSettings: React.FC<AutoRefillSettingsProps> = ({
       </div>
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-2">
-          <Label className="font-light">{localize('com_nav_balance_next_refill')}</Label>
-          <InfoHoverCard side={ESide.Bottom} text={localize('com_nav_balance_next_refill_info')} />
+          <Label className="font-light">
+            {localize(reset ? 'com_nav_balance_next_reset' : 'com_nav_balance_next_refill')}
+          </Label>
+          <InfoHoverCard
+            side={ESide.Bottom}
+            text={localize(
+              reset ? 'com_nav_balance_next_reset_info' : 'com_nav_balance_next_refill_info',
+            )}
+          />
         </div>
 
-        <span className="text-sm font-medium text-text-primary" role="note">
+        <span className="text-text-primary text-sm font-medium" role="note">
           {isRefillReady && localize('com_nav_balance_next_refill_ready')}
-          {!isRefillReady && refillEligibilityDate
-            ? refillEligibilityDate.toLocaleString(undefined, { hour12 })
-            : null}
-          {!refillEligibilityDate && '-'}
+          {!isRefillReady && nextRefill ? nextRefill.toLocaleString(undefined, { hour12 }) : null}
+          {!nextRefill && '-'}
         </span>
       </div>
       {isRefillReady && (
-        <p className="text-xs text-text-secondary">
+        <p className="text-text-secondary text-xs">
           {localize('com_nav_balance_next_refill_ready_info')}
         </p>
       )}

@@ -297,7 +297,7 @@ export default function ApiKeyDialog({
       triggerRefs={triggerRefs}
     >
       <OGDialogTemplate
-        className="w-11/12 sm:w-[500px]"
+        className="w-11/12 sm:w-[min(31.25rem,90vw)]"
         title=""
         main={
           <>
@@ -358,7 +358,7 @@ export default function ApiKeyDialog({
         }
         selection={{
           selectHandler: handleSubmit(handleVisibleSubmit),
-          selectClasses: 'bg-surface-submit hover:bg-surface-submit-hover text-white',
+          selectClasses: 'bg-surface-submit hover:bg-surface-submit-hover text-text-on-status',
           selectText: localize('com_ui_save'),
         }}
         buttons={

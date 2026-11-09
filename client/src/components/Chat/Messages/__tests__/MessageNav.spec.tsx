@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, act, fireEvent } from '@testing-library/react';
+import { render, act, fireEvent, screen } from '@testing-library/react';
 
 type ReactNode = React.ReactNode;
 type RefObject<T> = React.RefObject<T>;
@@ -21,6 +21,7 @@ type TestMessage = {
 const mockUseGetMessagesByConvoId = jest.fn();
 const mockUseMessagesConversation = jest.fn();
 const mockUseMessagesSubmission = jest.fn();
+let mockRemScale = 1;
 
 jest.mock('~/data-provider', () => ({
   useGetMessagesByConvoId: (...args: unknown[]) => mockUseGetMessagesByConvoId(...args),
@@ -47,6 +48,8 @@ jest.mock('@librechat/client', () => ({
     asChild ? children : <div>{children}</div>,
   HoverCardPortal: ({ children }: { children: ReactNode }) => <>{children}</>,
   HoverCardContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  pxToRem: jest.requireActual('../../../../../../packages/client/src/utils/theme').pxToRem,
+  useRemScale: () => mockRemScale,
 }));
 
 if (typeof window.matchMedia !== 'function') {
@@ -243,6 +246,7 @@ function clearDom() {
 }
 
 beforeEach(() => {
+  mockRemScale = 1;
   MockIntersectionObserver.reset();
   (
     global as unknown as { IntersectionObserver: typeof MockIntersectionObserver }
@@ -262,6 +266,17 @@ afterEach(() => {
 });
 
 describe('MessageNav', () => {
+  it('queries the rendered destination instead of the lagging conversation context', () => {
+    const { scrollable } = buildDom([]);
+    render(<MessageNav conversationId="destination" scrollableRef={{ current: scrollable }} />);
+
+    expect(mockUseGetMessagesByConvoId).toHaveBeenCalledWith(
+      'destination',
+      { enabled: true },
+      { isStreaming: false },
+    );
+  });
+
   describe('rendering threshold', () => {
     it('renders nothing when there are 0 messages', () => {
       const { container } = renderNav([]);
@@ -336,20 +351,6 @@ describe('MessageNav', () => {
   });
 
   describe('indicator styling', () => {
-    it('gives every message rib the same short resting width regardless of role', () => {
-      const messages = [
-        buildMessage({ messageId: 'u', text: 'user msg', isCreatedByUser: true }),
-        buildMessage({ messageId: 'a', text: 'assistant msg' }),
-        buildMessage({ messageId: 'u2', text: 'more user', isCreatedByUser: true }),
-      ];
-      const { container } = renderNav(messages);
-      const [, assistantInd, userInd] = messageRibs(container);
-      const userLine = assistantInd.querySelector('span') as HTMLElement;
-      const assistantLine = userInd.querySelector('span') as HTMLElement;
-      expect(userLine.style.width).toBe('12px');
-      expect(assistantLine.style.width).toBe('12px');
-    });
-
     it('gives the current rib a longer resting width than its neighbours', () => {
       const messages = [
         buildMessage({ messageId: 'u', text: 'user msg', isCreatedByUser: true }),
@@ -362,17 +363,6 @@ describe('MessageNav', () => {
       const currentWidth = parseFloat((current.querySelector('span') as HTMLElement).style.width);
       const nextWidth = parseFloat((next.querySelector('span') as HTMLElement).style.width);
       expect(currentWidth).toBeGreaterThan(nextWidth);
-    });
-
-    it('holds every rib row at a fixed height so the column cannot compress them', () => {
-      const messages = Array.from({ length: 6 }, (_, i) =>
-        buildMessage({ messageId: `m-${i}`, text: `message ${i}` }),
-      );
-      const { container } = renderNav(messages);
-      for (const rib of messageRibs(container)) {
-        expect(rib.className).toContain('shrink-0');
-        expect(rib.style.height).toBe('6px');
-      }
     });
 
     it('lights up only the in-viewport ribs at rest (no hover)', () => {
@@ -392,7 +382,17 @@ describe('MessageNav', () => {
       const ribB = container.querySelector('[data-msg-id="b"]') as HTMLElement;
       expect(ribA.className).toContain('opacity-100');
       expect(ribA.className).not.toContain('opacity-40');
+      expect(ribA.querySelector('span')).toHaveClass('bg-text-primary');
       expect(ribB.className).toContain('opacity-40');
+      expect(ribB.className).toContain('high-contrast:opacity-50');
+      expect(ribB.querySelector('span')).toHaveClass('bg-text-tertiary');
+      expect(ribA.querySelector('span')?.className).not.toMatch(/bg-gray-|dark:bg-gray-/);
+      expect(ribB.querySelector('span')?.className).not.toMatch(/bg-gray-|dark:bg-gray-/);
+
+      const previous = screen.getByRole('button', { name: 'com_ui_message_nav_previous' });
+      const next = screen.getByRole('button', { name: 'com_ui_message_nav_next' });
+      expect(previous).toHaveClass('text-text-tertiary', 'high-contrast:opacity-50');
+      expect(next).toHaveClass('text-text-tertiary', 'high-contrast:opacity-50');
     });
   });
 
@@ -484,7 +484,8 @@ describe('MessageNav', () => {
     ): HTMLDivElement {
       const steer = document.createElement('div');
       steer.id = `steer-${steerId}`;
-      steer.className = 'steer-render group relative';
+      steer.className = 'group relative';
+      steer.setAttribute('data-steer-render', '');
       const header = document.createElement('h2');
       header.textContent = 'Danny';
       const body = document.createElement('div');
@@ -716,7 +717,7 @@ describe('MessageNav', () => {
       const activeLine = container.querySelector('[aria-current="true"] span');
       expect(activeLine?.className).toContain('bg-text-primary');
 
-      /** The other two rows are on screen, so they read as the in-view band —
+      /** The other two rows are on screen, so they read as the in-view band:
        *  lit, but plainly not the mark that says where the reader is. */
       const band = messageRibs(container)
         .slice(1)
@@ -754,7 +755,7 @@ describe('MessageNav', () => {
        *  two places short of the end while the reader sat at the very bottom. */
       const steer = document.createElement('div');
       steer.id = 'steer-s1';
-      steer.className = 'steer-render';
+      steer.setAttribute('data-steer-render', '');
       steer.textContent = 'mid-run steer';
       Object.defineProperty(steer, 'offsetTop', { value: 60, configurable: true });
       Object.defineProperty(steer, 'offsetHeight', { value: 40, configurable: true });
@@ -1218,7 +1219,7 @@ describe('MessageNav', () => {
       expect(writes.length).toBeGreaterThan(0);
     });
 
-    it('highlights only the hovered rib white, dimming the rest', () => {
+    it('highlights only the hovered rib, dimming the rest', () => {
       const messages = [
         buildMessage({ messageId: 'a', text: 'alpha', isCreatedByUser: true }),
         buildMessage({ messageId: 'b', text: 'bravo' }),
@@ -1234,11 +1235,11 @@ describe('MessageNav', () => {
       });
 
       const ribs = messageRibs(container);
-      const white = ribs.filter((r) =>
+      const highlighted = ribs.filter((r) =>
         r.querySelector('span')?.className.includes('bg-text-primary'),
       );
-      expect(white).toHaveLength(1);
-      expect(white[0]).toHaveAttribute('data-msg-id', 'a');
+      expect(highlighted).toHaveLength(1);
+      expect(highlighted[0]).toHaveAttribute('data-msg-id', 'a');
     });
   });
 
@@ -1881,6 +1882,41 @@ describe('MessageNav', () => {
       restoreLayout();
     });
 
+    it.each([0.5, 1.5])('keeps magnified ribs inside their rows at scale %s', (scale) => {
+      mockRemScale = scale;
+      const messages = Array.from({ length: 6 }, (_, i) =>
+        buildMessage({ messageId: `m-${i}`, text: `message ${i}` }),
+      );
+      const restoreLayout = stubRibLayout(
+        messages.map((message) => message.messageId),
+        12 * scale,
+        6 * scale,
+      );
+      const { container } = renderNavWithEnd(messages);
+      const column = getColumn(container);
+      column.getBoundingClientRect = () =>
+        ({ top: 0, bottom: 72 * scale, height: 72 * scale, left: 0, right: 0 }) as DOMRect;
+      const row = messageRibs(container)[3];
+      const line = row.querySelector('span') as HTMLElement;
+      const pixels = (length: string) =>
+        parseFloat(length) * (length.endsWith('rem') ? 16 * scale : 1);
+      const restingHeight = pixels(line.style.height);
+
+      act(() => {
+        fireEvent.pointerMove(column, { pointerId: 1, clientY: 39 * scale });
+        jest.advanceTimersByTime(80);
+      });
+
+      expect(pixels(line.style.height)).toBeGreaterThan(restingHeight);
+      expect(pixels(line.style.height)).toBeLessThanOrEqual(pixels(row.style.height));
+
+      act(() => {
+        fireEvent.pointerLeave(column, { pointerId: 1 });
+      });
+      expect(pixels(line.style.height)).toBe(restingHeight);
+      restoreLayout();
+    });
+
     it('peaks the fisheye and preview on the rib under the pointer', () => {
       const messages = Array.from({ length: 6 }, (_, i) =>
         buildMessage({ messageId: `m-${i}`, text: `message ${i}` }),
@@ -2491,4 +2527,27 @@ describe('MessageNav', () => {
       restoreLayout();
     });
   });
+});
+
+it('classifies a host-authored background wake-up as System navigation', () => {
+  const text =
+    'A background tool task has finished. Continue using its durable result below.\n' +
+    JSON.stringify([
+      {
+        background_task_id: 'task',
+        tool_call_id: 'call',
+        tool: 'bash_tool',
+        status: 'completed',
+        result: 'done',
+      },
+    ]);
+  const entry = buildEntry('system', asTMessage(buildMessage({ text, isCreatedByUser: true })));
+  expect(entry).toMatchObject({ isUser: false, isSystem: true });
+});
+
+it('classifies a DOM-only System row separately from assistant navigation', () => {
+  const node = document.createElement('div');
+  node.innerHTML =
+    '<div data-system-turn="true"><div data-testid="message-body">Task finished</div></div>';
+  expect(buildFallbackEntry(node, 'system')).toMatchObject({ isSystem: true });
 });

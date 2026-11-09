@@ -14,10 +14,14 @@ export * from './Projects';
 /* Scheduled chats */
 export * from './Schedules';
 export * from './Subagents';
+export * from './BackgroundTasks';
+export * from './PullRequest';
 export * from './Tools';
+export * from './Traces';
 export * from './Usage';
 export * from './connection';
 export * from './Favorites';
+export * from './CodeEnvironments';
 export * from './mutations';
 export * from './prompts';
 export * from './queries';

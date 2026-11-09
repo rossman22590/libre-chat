@@ -1,5 +1,10 @@
 const cookies = require('cookie');
-const { isEnabled, math, clearCloudFrontCookies } = require('@librechat/api');
+const {
+  isEnabled,
+  math,
+  clearCloudFrontCookies,
+  clearSessionHintCookie,
+} = require('@librechat/api');
 const { logger, DEFAULT_REFRESH_TOKEN_EXPIRY } = require('@librechat/data-schemas');
 const { logoutUser } = require('~/server/services/AuthService');
 const { deleteAllRefreshTokenBridges } = require('~/server/services/RefreshTokenBridge');
@@ -36,7 +41,10 @@ const logoutController = async (req, res) => {
   }
   /** Both can name distinct durable sessions when an older browser request races rotation. */
   refreshToken = parsedCookies.refreshToken || sessionRefreshToken;
-  idToken = idToken || parsedCookies.openid_id_token;
+  idToken =
+    idToken ||
+    (isOpenIdUser ? req.session?.openidLogoutIdToken : undefined) ||
+    parsedCookies.openid_id_token;
   const logoutTokens = isOpenIdUser
     ? [...new Set([parsedCookies.refreshToken, sessionRefreshToken].filter(Boolean))]
     : [refreshToken];
@@ -63,8 +71,9 @@ const logoutController = async (req, res) => {
         userId,
         tenantId: req.user?.tenantId,
       });
-      if (req.session?.openidTokens) {
+      if (req.session) {
         delete req.session.openidTokens;
+        delete req.session.openidLogoutIdToken;
       }
     }
     if (logoutTokens.length === 0) {
@@ -84,6 +93,7 @@ const logoutController = async (req, res) => {
     res.clearCookie('openid_id_token');
     res.clearCookie('openid_user_id');
     res.clearCookie('token_provider');
+    clearSessionHintCookie(res);
     clearCloudFrontCookies(res, {
       userId: req.user?.id ?? req.user?._id?.toString?.(),
       tenantId: req.user?.tenantId,
@@ -158,7 +168,7 @@ const logoutController = async (req, res) => {
             } else {
               logger.warn(
                 '[logoutController] Neither id_token_hint nor OPENID_CLIENT_ID is available. ' +
-                  'To enable id_token_hint, set OPENID_REUSE_TOKENS=true. ' +
+                  'Sign in again to establish an OpenID session with an ID token. ' +
                   'The OIDC end-session request may be rejected by the identity provider.',
               );
             }

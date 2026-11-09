@@ -21,6 +21,9 @@ const mockCanAccessSharedLink = jest.fn((req, _res, next) => {
   next();
 });
 const mockGetAppConfig = jest.fn();
+const mockPrepareResultToolCallPreviews = jest.fn(() => async (result) => result);
+const mockShareIpLimiter = jest.fn((_req, _res, next) => next());
+const mockShareUserLimiter = jest.fn((_req, _res, next) => next());
 const mockParseSharedLinksPageSize = jest.fn(() => 10);
 const mockIsValidSharedLinksCursor = jest.fn(() => true);
 const mockAssertConversationContentAllowed = jest.fn();
@@ -76,6 +79,8 @@ const mockCreateShareContentPreflight = jest.fn((filters, options = {}) => {
 });
 
 jest.mock('@librechat/api', () => ({
+  prepareResultToolCallPreviews: (...args) => mockPrepareResultToolCallPreviews(...args),
+  resolveDownloadPath: (file) => file.storageKey || file.filepath,
   assertModelBoundContent: (...args) => mockAssertModelBoundContent(...args),
   assertSharedFileMetadataAllowed: (...args) => mockAssertSharedFileMetadataAllowed(...args),
   createShareContentPreflight: (...args) => mockCreateShareContentPreflight(...args),
@@ -110,11 +115,12 @@ jest.mock('@librechat/api', () => ({
     (error) =>
       error?.code === 'content_filter_block' || error?.code === 'content_filter_uninspectable',
   ),
+  isConversationImportError: jest.fn((error) => error?.name === 'ConversationImportError'),
 }));
 
 jest.mock('@librechat/data-schemas', () => ({
   logger: { error: jest.fn(), warn: jest.fn() },
-  createTempChatExpirationDate: jest.fn(() => new Date('2030-01-01T00:00:00.000Z')),
+  createChatExpirationDate: jest.fn(() => new Date('2030-01-01T00:00:00.000Z')),
   runAsSystem: jest.fn((fn) => fn()),
   tenantStorage: {
     getStore: jest.fn(() => ({ requestId: 'request-123' })),
@@ -124,27 +130,29 @@ jest.mock('@librechat/data-schemas', () => ({
   SystemCapabilities: { ACCESS_ADMIN: 'access:admin' },
 }));
 
-jest.mock('librechat-data-provider', () => ({
-  PermissionTypes: {
-    SHARED_LINKS: 'SHARED_LINKS',
-  },
-  Permissions: {
-    CREATE: 'CREATE',
-    SHARE_PUBLIC: 'SHARE_PUBLIC',
-  },
-  RetentionMode: {
-    ALL: 'all',
-    TEMPORARY: 'temporary',
-  },
-  FileSources: {
-    local: 'local',
-    s3: 's3',
-    cloudfront: 'cloudfront',
-    azure_blob: 'azure_blob',
-    firebase: 'firebase',
-    text: 'text',
-  },
-}));
+jest.mock('librechat-data-provider', () => {
+  const RetentionMode = { ALL: 'all', TEMPORARY: 'temporary', EPHEMERAL: 'ephemeral' };
+  return {
+    PermissionTypes: {
+      SHARED_LINKS: 'SHARED_LINKS',
+    },
+    Permissions: {
+      CREATE: 'CREATE',
+      SHARE_PUBLIC: 'SHARE_PUBLIC',
+    },
+    RetentionMode,
+    isAllDataRetention: (mode) => mode === RetentionMode.ALL || mode === RetentionMode.EPHEMERAL,
+    isForcedTemporaryRetention: (mode) => mode === RetentionMode.EPHEMERAL,
+    FileSources: {
+      local: 'local',
+      s3: 's3',
+      cloudfront: 'cloudfront',
+      azure_blob: 'azure_blob',
+      firebase: 'firebase',
+      text: 'text',
+    },
+  };
+});
 
 jest.mock('mongoose', () => ({
   models: {
@@ -205,6 +213,10 @@ jest.mock('~/server/middleware/limiters', () => ({
     forkIpLimiter: (_req, _res, next) => next(),
     forkUserLimiter: (_req, _res, next) => next(),
   }),
+  createShareLimiters: () => ({
+    shareIpLimiter: (req, res, next) => mockShareIpLimiter(req, res, next),
+    shareUserLimiter: (req, res, next) => mockShareUserLimiter(req, res, next),
+  }),
 }));
 
 jest.mock('~/server/utils/import/fork', () => ({
@@ -216,7 +228,7 @@ jest.mock('~/server/utils/import/importBatchBuilder', () => ({
 
 const { Readable } = require('stream');
 const { RetentionMode } = require('librechat-data-provider');
-const { createTempChatExpirationDate, logger } = require('@librechat/data-schemas');
+const { createChatExpirationDate, logger } = require('@librechat/data-schemas');
 const {
   deleteSharedLinkWithCleanup,
   isFileSnapshotEnabled,
@@ -368,6 +380,15 @@ describe('share routes', () => {
 
     expect(response.status).toBe(200);
     expect(mockGetAppConfig).toHaveBeenCalledWith({ baseOnly: true });
+  });
+
+  it('rate limits shared message retrieval by IP and by user', async () => {
+    mockSharedMessagesResult({ shareId: 'share-123', messages: [] });
+
+    await request(buildApp()).get('/api/share/share-123').expect(200);
+
+    expect(mockShareIpLimiter).toHaveBeenCalledTimes(1);
+    expect(mockShareUserLimiter).toHaveBeenCalledTimes(1);
   });
 
   it('prevents successful shared message responses from being cached', async () => {
@@ -773,7 +794,7 @@ describe('share routes', () => {
       }),
       expect.objectContaining({
         getConvo: expect.any(Function),
-        createExpirationDate: createTempChatExpirationDate,
+        createExpirationDate: createChatExpirationDate,
         logger,
       }),
     );
@@ -1159,7 +1180,7 @@ describe('share routes', () => {
       }),
       expect.objectContaining({
         getConvo: expect.any(Function),
-        createExpirationDate: createTempChatExpirationDate,
+        createExpirationDate: createChatExpirationDate,
         logger,
       }),
     );
@@ -1484,6 +1505,33 @@ describe('share fork route', () => {
     });
   });
 
+  it("shapes a cross-tenant fork with the recipient's preview bounds, not the owner's", async () => {
+    const forkResult = { conversation: { conversationId: 'convo-456' }, messages: [{ id: 'm' }] };
+    const previewed = { ...forkResult, messages: [{ id: 'previewed' }] };
+    const previewResult = jest.fn().mockResolvedValue(previewed);
+    mockPrepareResultToolCallPreviews.mockImplementationOnce((req, deps) => {
+      expect(req.user).toMatchObject({ id: 'viewer', tenantId: 'tenant-viewer' });
+      expect(req.config).toEqual({ owner: true });
+      deps.getAppConfig({ userId: req.user.id, tenantId: req.user.tenantId });
+      return previewResult;
+    });
+    forkSharedConversation.mockResolvedValue(forkResult);
+    mockShareTenantId = 'tenant-owner';
+    mockSharedLinkConfigMiddleware.mockImplementationOnce((req, _res, next) => {
+      req.config = { owner: true };
+      next();
+    });
+
+    const response = await request(
+      buildApp({ user: { id: 'viewer', role: 'USER', tenantId: 'tenant-viewer' } }),
+    ).post('/api/share/share-123/fork?toolPreviews=1');
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual(previewed);
+    expect(previewResult).toHaveBeenCalledWith(forkResult);
+    expect(mockGetAppConfig).toHaveBeenCalledWith({ userId: 'viewer', tenantId: 'tenant-viewer' });
+  });
+
   it('forces snapshotFiles=false into the fork when the file snapshot kill switch is active', async () => {
     isFileSnapshotKillSwitchActive.mockReturnValueOnce(true);
     forkSharedConversation.mockResolvedValue({
@@ -1512,6 +1560,23 @@ describe('share fork route', () => {
     const response = await request(buildApp()).post('/api/share/share-123/fork');
 
     expect(response.status).toBe(500);
+  });
+
+  it('returns an actionable client error when a cloned record is oversized', async () => {
+    const message = 'Each imported conversation or message must be at most 16711680 bytes';
+    const error = Object.assign(new Error(message), {
+      name: 'ConversationImportError',
+      code: 'invalid_request',
+      statusCode: 413,
+      body: { error: 'invalid_request', message },
+    });
+    forkSharedConversation.mockRejectedValue(error);
+
+    const response = await request(buildApp()).post('/api/share/share-123/fork');
+
+    expect(response.status).toBe(413);
+    expect(response.body).toEqual(error.body);
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('answers 409 when the viewer forks a payload the owner has republished', async () => {

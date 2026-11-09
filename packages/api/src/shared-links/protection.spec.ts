@@ -32,6 +32,44 @@ function capturePolicyError(
   throw new Error('Expected content policy to reject the shared metadata');
 }
 
+describe('native protected message sharing', () => {
+  it('inspects the remainder of canonical messages without matching generated revision tokens', async () => {
+    const revision = 'a'.repeat(32);
+    const message = {
+      isCreatedByUser: true,
+      text: `Email [EMAIL_1_${revision}]`,
+      privacyRevision: revision,
+    };
+    const preflight = createShareContentPreflight({
+      messages: {
+        pii: {
+          action: 'redact',
+          fields: ['text'],
+          starterPatterns: [],
+          customPatterns: [
+            { id: 'hex', label: 'Credential', regex: '[a-f0-9]{32}', category: 'credential' },
+          ],
+        },
+      },
+    });
+    await expect(preflight!({ title: 'Safe', messages: [message] })).resolves.toBeUndefined();
+    const publicMessage = { isCreatedByUser: true, text: message.text };
+    await expect(
+      preflight!({ title: 'Safe', messages: [publicMessage] }, { canonicalMessages: [message] }),
+    ).resolves.toBeUndefined();
+    expect(publicMessage).not.toHaveProperty('privacyRevision');
+    await expect(
+      preflight!({
+        title: 'Safe',
+        messages: [{ ...message, text: `${message.text} ${'f'.repeat(32)}` }],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      preflight!({ title: 'Safe', messages: [{ ...message, privacyRevision: undefined }] }),
+    ).rejects.toThrow();
+  });
+});
+
 describe('shared file metadata protection', () => {
   const attachmentFilters: FiltersConfig = {
     messages: {
@@ -1495,6 +1533,30 @@ describe('shared file metadata protection', () => {
       source: 'file',
       field: 'uri',
     });
+  });
+
+  it('allows malformed metadata traversal failures for an audit-only policy', () => {
+    let malformedUrl: Record<string, unknown> = { label: 'safe' };
+    for (let index = 0; index < 30; index++) {
+      malformedUrl = { nested: malformedUrl };
+    }
+
+    expect(() =>
+      assertSharedFileMetadataAllowed({
+        filters: {
+          files: {
+            pii: {
+              action: 'audit',
+              fields: ['uri'],
+              starterPatterns: [],
+              customPatterns: [BLOCK_PATTERN],
+            },
+          },
+        },
+        messages: [{ files: [{ url: malformedUrl as never }] }],
+        shareId: 'share-123',
+      }),
+    ).not.toThrow();
   });
 
   it('does not read serialized metadata beyond the traversal budget', () => {

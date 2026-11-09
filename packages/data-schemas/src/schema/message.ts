@@ -1,5 +1,6 @@
 import mongoose, { Schema } from 'mongoose';
 import type { IMessage } from '~/types/message';
+import { agentFadingContextDefinition } from './fading';
 
 const messageSchema: Schema<IMessage> = new Schema(
   {
@@ -58,6 +59,9 @@ const messageSchema: Schema<IMessage> = new Schema(
     summary: {
       type: String,
     },
+    privateText: { type: String, select: false },
+    privacyRevision: { type: String },
+    privateTextTokens: { type: [String], select: false, default: undefined },
     isCreatedByUser: {
       type: Boolean,
       required: true,
@@ -125,6 +129,9 @@ const messageSchema: Schema<IMessage> = new Schema(
       type: [String],
       default: undefined,
     },
+    langfuseRunId: {
+      type: String,
+    },
     _meiliIndex: {
       type: Boolean,
       required: false,
@@ -145,6 +152,16 @@ const messageSchema: Schema<IMessage> = new Schema(
       type: String,
     },
     metadata: { type: mongoose.Schema.Types.Mixed },
+    subagentContent: {
+      type: {
+        version: { type: Number, enum: [1], required: true },
+        throughSequence: Number,
+        deleted: { type: Boolean, default: undefined },
+      },
+      _id: false,
+      select: false,
+      default: undefined,
+    },
     subagentTranscript: {
       type: {
         taskId: { type: String, required: true },
@@ -158,7 +175,7 @@ const messageSchema: Schema<IMessage> = new Schema(
     subagentActivityProjection: {
       type: {
         taskId: { type: String, required: true },
-        version: { type: Number, enum: [1], required: true },
+        version: { type: Number, enum: [1, 2], required: true },
         activityJson: { type: String, required: true },
         truncated: { type: Boolean, required: true },
       },
@@ -235,6 +252,7 @@ const messageSchema: Schema<IMessage> = new Schema(
       type: {
         calibrationRatio: { type: Number },
         encoding: { type: String },
+        ...agentFadingContextDefinition,
       },
       _id: false,
       default: undefined,
@@ -265,6 +283,19 @@ const messageSchema: Schema<IMessage> = new Schema(
      * count), so they are not duplicated into the stored `text`.
      */
     quotes: { type: [String], default: undefined },
+    /** Request-scoped reasoning selection used for this user turn. */
+    reasoningOverride: {
+      type: {
+        key: {
+          type: String,
+          enum: ['reasoning_effort', 'effort', 'thinkingLevel', 'thinkingBudget'],
+          required: true,
+        },
+        value: { type: mongoose.Schema.Types.Mixed, required: true },
+      },
+      _id: false,
+      default: undefined,
+    },
     /*
     attachments: {
       type: [
@@ -306,6 +337,15 @@ messageSchema.index({ expiredAt: 1 }, { expireAfterSeconds: 0 });
 messageSchema.index({ createdAt: 1 });
 messageSchema.index({ messageId: 1, user: 1, tenantId: 1 }, { unique: true });
 messageSchema.index({ tenantId: 1, isTemporary: 1, createdAt: -1, _id: -1 });
+/** Insights attributes assistant activity from the persisted top-level agent model. */
+messageSchema.index({
+  tenantId: 1,
+  isTemporary: 1,
+  isCreatedByUser: 1,
+  model: 1,
+  createdAt: -1,
+  _id: -1,
+});
 messageSchema.index({
   tenantId: 1,
   isTemporary: 1,
@@ -324,6 +364,12 @@ messageSchema.index({
  * the sort back into memory for them.
  */
 messageSchema.index({ conversationId: 1, user: 1, createdAt: 1, _id: 1 });
+
+/**
+ * Serves the cursor-paginated message read when sorted by `updatedAt`, the
+ * default of `GET /api/messages`; the `createdAt` sort uses the index above.
+ */
+messageSchema.index({ conversationId: 1, user: 1, updatedAt: 1, _id: 1 });
 
 /**
  * Serves the batched newest-task read for child threads. `user` is an equality

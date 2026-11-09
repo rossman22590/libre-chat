@@ -104,19 +104,19 @@ function DeleteButton({
           title={localize('com_ui_delete_agent')}
           type="button"
         >
-          <div className="flex w-full items-center justify-center gap-2 text-text-destructive">
+          <div className="text-text-destructive flex w-full items-center justify-center gap-2">
             <TrashIcon />
           </div>
         </Button>
       </OGDialogTrigger>
       <OGDialogTemplate
         title={localize('com_ui_delete_agent')}
-        className="max-w-[450px]"
+        className="max-w-[28.125rem]"
         main={
           <>
             <div className="flex w-full flex-col items-center gap-2">
               <div className="grid w-full items-center gap-2">
-                <Label htmlFor="delete-agent" className="text-left text-sm font-medium">
+                <Label htmlFor="delete-agent" className="text-start text-sm font-medium">
                   {localize('com_ui_delete_agent_confirm')}
                 </Label>
               </div>
@@ -125,7 +125,8 @@ function DeleteButton({
         }
         selection={{
           selectHandler: () => deleteAgent.mutate({ agent_id }),
-          selectClasses: 'bg-surface-destructive hover:bg-surface-destructive-hover text-white',
+          selectClasses:
+            'bg-surface-destructive hover:bg-surface-destructive-hover text-text-on-status',
           selectText: localize('com_ui_delete'),
         }}
       />

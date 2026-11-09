@@ -6,17 +6,22 @@ const {
   resolveAgentScopedSkillIds,
   resolveModelSpecSkillIds,
   loadAddedAgent: loadAddedAgentFn,
+  hasEntityEmbeddings,
 } = require('@librechat/api');
 const { isEphemeralAgentId } = require('librechat-data-provider');
 const { filterFilesByAgentAccess } = require('~/server/services/Files/permissions');
 const { getMCPServerTools } = require('~/server/services/Config');
-const { getAccessibleMcpServerNames } = require('~/server/services/MCP');
+const { getAccessibleMcpServerNames, getAccessibleMCPServers } = require('~/server/services/MCP');
 const { isFatalAgentInitializationError } = require('~/server/services/ToolService');
 const { getSkillDbMethods, canAuthorSkillFiles } = require('./skillDeps');
 const db = require('~/models');
 
 const loadAddedAgent = (params) =>
-  loadAddedAgentFn(params, { getAgent: db.getAgent, getMCPServerTools });
+  loadAddedAgentFn(params, {
+    getAgent: db.getAgentWithVersionCount,
+    getMCPServerTools,
+    getAccessibleMCPServers,
+  });
 
 /**
  * Process addedConvo for parallel agent execution.
@@ -57,8 +62,16 @@ const loadAddedAgent = (params) =>
  * @param {boolean} [params.codeEnvAvailable] - `execute_code` capability flag;
  *   forwarded verbatim to the added agent's `initializeAgent`. @see
  *   InitializeAgentParams.codeEnvAvailable for full semantics.
+ * @param {boolean} [params.fileSearchAvailable] - `file_search` capability AND
+ *   the caller's `FILE_SEARCH` grant; forwarded verbatim alongside
+ *   `codeEnvAvailable`. @see InitializeAgentParams.fileSearchAvailable.
  * @param {boolean} [params.statefulSessionsAvailable] - `stateful_code_sessions`
  *   capability flag; forwarded verbatim alongside `codeEnvAvailable`.
+ * @param {import('@librechat/api').ResolveLinkedInstructions} [params.resolveLinkedInstructions] -
+ *   Resolver for the added agent's own `instructionsPrompt` link, forwarded verbatim.
+ * @param {boolean} [params.recordLinkedPromptUsage] - Forwarded to `initializeAgent`;
+ *   defaults to `true` there when omitted.
+ * @param {AbortSignal} [params.signal] - Owning run cancellation signal.
  * @returns {Promise<{userMCPAuthMap: Object|undefined}>} The updated userMCPAuthMap
  */
 const processAddedConvo = async ({
@@ -85,10 +98,14 @@ const processAddedConvo = async ({
   skillStates,
   defaultActiveOnShare,
   codeEnvAvailable,
+  fileSearchAvailable,
+  resolveLinkedInstructions,
+  recordLinkedPromptUsage,
   backgroundToolsAvailable,
   toolIntentsAvailable,
   statefulSessionsAvailable,
   memoryAvailable,
+  signal,
 }) => {
   const addedConvo = endpointOption.addedConvo;
   if (addedConvo == null) {
@@ -145,6 +162,7 @@ const processAddedConvo = async ({
           names: selectedModelSpec.skills,
           accessibleSkillIds,
           getSkillByName: skillDbMethods.getSkillByName,
+          appConfig: req.config,
         });
         addedAgent.skills_enabled = true;
         addedAgent.skills = resolvedSkillIds.map((id) => id.toString());
@@ -185,15 +203,22 @@ const processAddedConvo = async ({
           ephemeralSkillsToggle,
         }),
         codeEnvAvailable,
+        fileSearchAvailable,
+        resolveLinkedInstructions,
+        recordLinkedPromptUsage,
         backgroundToolsAvailable,
         toolIntentsAvailable,
         statefulSessionsAvailable,
         memoryAvailable,
         skillStates,
         defaultActiveOnShare,
+        signal,
       },
       {
+        getProjectFiles: db.getProjectFiles,
         getFiles: db.getFiles,
+        adoptLegacySearchEmbeddings: db.adoptLegacySearchEmbeddings,
+        hasEntityEmbeddings,
         getUserKey: db.getUserKey,
         getMessages: db.getMessages,
         getConvoFiles: db.getConvoFiles,
@@ -207,6 +232,7 @@ const processAddedConvo = async ({
         listSkillsByAccess: skillDbMethods.listSkillsByAccess,
         listAlwaysApplySkills: skillDbMethods.listAlwaysApplySkills,
         getSkillByName: skillDbMethods.getSkillByName,
+        getRoleByName: db.getRoleByName,
       },
     );
 
@@ -230,7 +256,7 @@ const processAddedConvo = async ({
 
     return { userMCPAuthMap };
   } catch (err) {
-    if (isFatalAgentInitializationError(err)) {
+    if (isFatalAgentInitializationError(err, { signal })) {
       throw err;
     }
     logger.error('[processAddedConvo] Error processing addedConvo for parallel agent', err);
