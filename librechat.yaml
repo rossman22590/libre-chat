@@ -912,9 +912,9 @@ endpoints:
         fetch: true
       dropParams: ["stop"]
       titleConvo: true
-      titleModel: "gpt-6-luna"
+      titleModel: "openai/gpt-6-luna"
       summarize: false
-      summaryModel: "gpt-6-luna"
+      summaryModel: "openai/gpt-6-luna"
       forcePrompt: false
       modelDisplayLabel: "OpenRouter"
     #groq
