@@ -151,17 +151,18 @@ type ModelArchitecture = {
   output_modalities?: string[] | null;
 };
 
+/** One entry of a provider's model listing. */
+type ListedModel = ModelArchitecture & { id: string; architecture?: ModelArchitecture | null };
+
 /**
  * Whether a listed model is a text-generating chat model. Listings that describe each model's
  * outputs (OpenRouter) also include image, audio, video and embedding models, which cannot hold
  * a chat; a model qualifies only when every output it declares is text. Listings without that
  * metadata are kept as-is.
  */
-export function isTextOutputModel(item: { architecture?: ModelArchitecture | null }): boolean {
-  const architecture = item.architecture;
-  if (architecture == null) {
-    return true;
-  }
+export function isTextOutputModel(item: Omit<ListedModel, 'id'>): boolean {
+  /** OpenRouter nests the outputs under `architecture`; xAI lists them on the model itself. */
+  const architecture = item.architecture ?? item;
   let outputs: string[] | null = null;
   if (Array.isArray(architecture.output_modalities) && architecture.output_modalities.length > 0) {
     outputs = architecture.output_modalities;
@@ -172,6 +173,21 @@ export function isTextOutputModel(item: { architecture?: ModelArchitecture | nul
     return true;
   }
   return outputs.every((output) => output.trim().toLowerCase() === 'text');
+}
+
+/**
+ * The listing path for a provider. xAI's `/models` mixes image and video generation models in
+ * without saying so; its `/language-models` lists only chat models, under `models`.
+ */
+export function getModelListPath(baseURL: string): string {
+  try {
+    if (new URL(baseURL).hostname === 'api.x.ai') {
+      return '/language-models';
+    }
+  } catch {
+    // An unparseable baseURL keeps the standard path; the request itself reports the error.
+  }
+  return '/models';
 }
 
 /**
@@ -308,7 +324,8 @@ export async function fetchModels({
       options.headers['OpenAI-Organization'] = process.env.OPENAI_ORGANIZATION;
     }
 
-    const url = new URL(`${(baseURL ?? '').replace(/\/+$/, '')}${azure ? '' : '/models'}`);
+    const trimmedBaseURL = (baseURL ?? '').replace(/\/+$/, '');
+    const url = new URL(`${trimmedBaseURL}${azure ? '' : getModelListPath(trimmedBaseURL)}`);
     if (user && userIdQuery) {
       url.searchParams.append('user', user);
     }
@@ -327,9 +344,9 @@ export async function fetchModels({
         await cache.set(getModelCacheTokenConfigKey(cacheKey), endpointTokenConfig);
       }
     }
-    models = input.data
-      .filter(isTextOutputModel)
-      .map((item: { id: string }) => item.id);
+    /** xAI's `/language-models` lists under `models`; OpenAI-compatible listings use `data`. */
+    const listed: ListedModel[] = Array.isArray(input?.data) ? input.data : input.models;
+    models = listed.filter(isTextOutputModel).map((item) => item.id);
   } catch (error) {
     const logMessage = `Failed to fetch models from ${azure ? 'Azure ' : ''}${name} API`;
     logAxiosError({ message: logMessage, error: error as Error });

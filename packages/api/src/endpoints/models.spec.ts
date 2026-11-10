@@ -4,6 +4,7 @@ import {
   fetchModels,
   splitAndTrim,
   isTextOutputModel,
+  getModelListPath,
   getOpenAIModels,
   getGoogleModels,
   getBedrockModels,
@@ -1184,5 +1185,39 @@ describe('fetchModels output filtering', () => {
     });
 
     expect(models).toEqual(['openai/gpt-6-luna', 'plain-model']);
+  });
+});
+
+describe('xAI model listing', () => {
+  it('uses the language-models path for api.x.ai only', () => {
+    expect(getModelListPath('https://api.x.ai/v1')).toBe('/language-models');
+    expect(getModelListPath('https://openrouter.ai/api/v1')).toBe('/models');
+    expect(getModelListPath('https://api.x.ai.example.com/v1')).toBe('/models');
+    expect(getModelListPath('not a url')).toBe('/models');
+  });
+
+  it('fetches xAI language models and keeps only text output', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      data: {
+        models: [
+          { id: 'grok-4.3', input_modalities: ['text', 'image'], output_modalities: ['text'] },
+          { id: 'grok-3-mini', output_modalities: ['text'] },
+          { id: 'grok-imagine-image', output_modalities: ['image'] },
+        ],
+      },
+    });
+
+    const models = await fetchModels({
+      apiKey: 'testApiKey',
+      baseURL: 'https://api.x.ai/v1',
+      name: 'xai',
+      createTokenConfig: false,
+    });
+
+    expect(models).toEqual(['grok-4.3', 'grok-3-mini']);
+    expect(mockedAxios.get).toHaveBeenLastCalledWith(
+      'https://api.x.ai/v1/language-models',
+      expect.any(Object),
+    );
   });
 });
