@@ -3,6 +3,7 @@ import { Time, EModelEndpoint, defaultModels, AuthType } from 'librechat-data-pr
 import {
   fetchModels,
   splitAndTrim,
+  isTextOutputModel,
   getOpenAIModels,
   getGoogleModels,
   getBedrockModels,
@@ -1137,5 +1138,51 @@ describe('configured model lists skip provider discovery', () => {
     mockedAxios.get.mockResolvedValue({ data: { data: [{ id: 'gpt-discovered' }] } });
     await getOpenAIModels({ user: 'user-1' });
     expect(mockedAxios.get).toHaveBeenCalled();
+  });
+});
+
+describe('isTextOutputModel', () => {
+  it('keeps models whose only output is text', () => {
+    expect(isTextOutputModel({ architecture: { output_modalities: ['text'] } })).toBe(true);
+    expect(isTextOutputModel({ architecture: { modality: 'text+image->text' } })).toBe(true);
+  });
+
+  it('drops image, audio and embedding models', () => {
+    expect(isTextOutputModel({ architecture: { output_modalities: ['image'] } })).toBe(false);
+    expect(isTextOutputModel({ architecture: { output_modalities: ['image', 'text'] } })).toBe(
+      false,
+    );
+    expect(isTextOutputModel({ architecture: { output_modalities: ['embeddings'] } })).toBe(false);
+    expect(isTextOutputModel({ architecture: { modality: 'text->audio' } })).toBe(false);
+  });
+
+  it('keeps models from listings without output metadata', () => {
+    expect(isTextOutputModel({})).toBe(true);
+    expect(isTextOutputModel({ architecture: null })).toBe(true);
+    expect(isTextOutputModel({ architecture: { output_modalities: [] } })).toBe(true);
+  });
+});
+
+describe('fetchModels output filtering', () => {
+  it('returns only text models from an OpenRouter-style listing', async () => {
+    mockedAxios.get.mockResolvedValueOnce({
+      data: {
+        data: [
+          { id: 'openai/gpt-6-luna', architecture: { output_modalities: ['text'] } },
+          { id: 'google/gemini-image', architecture: { output_modalities: ['image', 'text'] } },
+          { id: 'openai/text-embedding-3', architecture: { output_modalities: ['embeddings'] } },
+          { id: 'plain-model' },
+        ],
+      },
+    });
+
+    const models = await fetchModels({
+      apiKey: 'testApiKey',
+      baseURL: 'https://openrouter.ai/api/v1',
+      name: 'OpenRouter',
+      createTokenConfig: false,
+    });
+
+    expect(models).toEqual(['openai/gpt-6-luna', 'plain-model']);
   });
 });

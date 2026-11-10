@@ -145,6 +145,35 @@ export function splitAndTrim(input: string | null | undefined): string[] {
     .filter(Boolean);
 }
 
+/** What a model listing (e.g. OpenRouter's) says the model produces. */
+type ModelArchitecture = {
+  modality?: string | null;
+  output_modalities?: string[] | null;
+};
+
+/**
+ * Whether a listed model is a text-generating chat model. Listings that describe each model's
+ * outputs (OpenRouter) also include image, audio, video and embedding models, which cannot hold
+ * a chat; a model qualifies only when every output it declares is text. Listings without that
+ * metadata are kept as-is.
+ */
+export function isTextOutputModel(item: { architecture?: ModelArchitecture | null }): boolean {
+  const architecture = item.architecture;
+  if (architecture == null) {
+    return true;
+  }
+  let outputs: string[] | null = null;
+  if (Array.isArray(architecture.output_modalities) && architecture.output_modalities.length > 0) {
+    outputs = architecture.output_modalities;
+  } else if (typeof architecture.modality === 'string' && architecture.modality.includes('->')) {
+    outputs = architecture.modality.split('->')[1].split('+');
+  }
+  if (outputs == null) {
+    return true;
+  }
+  return outputs.every((output) => output.trim().toLowerCase() === 'text');
+}
+
 /**
  * Fetches models from the specified base API path or Azure, based on the provided configuration.
  *
@@ -298,7 +327,9 @@ export async function fetchModels({
         await cache.set(getModelCacheTokenConfigKey(cacheKey), endpointTokenConfig);
       }
     }
-    models = input.data.map((item: { id: string }) => item.id);
+    models = input.data
+      .filter(isTextOutputModel)
+      .map((item: { id: string }) => item.id);
   } catch (error) {
     const logMessage = `Failed to fetch models from ${azure ? 'Azure ' : ''}${name} API`;
     logAxiosError({ message: logMessage, error: error as Error });
