@@ -1,5 +1,6 @@
 require('../config/credentials');
 
+const sentry = require('./sentry');
 const telemetry = require('./telemetry');
 const fs = require('fs');
 const path = require('path');
@@ -496,6 +497,9 @@ const startServer = async () => {
 
   /** SPA fallback - serve index.html for all unmatched routes */
   app.use(createSpaFallback(sendIndexHtml));
+
+  /** Report errors to Sentry before the final error controller. */
+  sentry.setupSentryErrorHandler(app);
 
   /** Record trace errors before the final error controller. */
   if (telemetry.enabled) {

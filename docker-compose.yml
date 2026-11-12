@@ -5,7 +5,12 @@
 services:
   api:
     container_name: LibreChat
-    build: .
+    build:
+      context: .
+      args:
+        SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
+        SENTRY_ORG: ${SENTRY_ORG:-}
+        SENTRY_PROJECT: ${SENTRY_PROJECT:-}
     ports:
       - "${PORT:-3080}:${PORT:-3080}"
     env_file:

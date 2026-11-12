@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { defineConfig } from 'tsdown';
+import { sentryRollupPlugin } from '@sentry/rollup-plugin';
+import { sentryBuildOptions, shouldUploadSourceMaps } from '../../config/sentry.mjs';
 
 export default defineConfig({
   // The telemetry entry is a thin shim (`src/telemetry.ts`) rather than the
@@ -10,6 +12,7 @@ export default defineConfig({
     'src/index.ts',
     'src/telemetry.ts',
     'src/credentials.ts',
+    'src/sentry.ts',
     'src/agents/files/edit-worker.ts',
     'src/auth/hash-worker.ts',
   ],
@@ -18,6 +21,7 @@ export default defineConfig({
   dts: { oxc: true },
   outDir: 'dist',
   sourcemap: true,
+  plugins: shouldUploadSourceMaps() ? [sentryRollupPlugin(sentryBuildOptions())] : [],
   // Warn on module cycles at build time; CI enforces via config/circular-deps.mjs.
   checks: { circularDependency: true },
   // Externalize every third-party dependency (consumers provide the peers) and bundle

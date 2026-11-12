@@ -9,8 +9,10 @@ import { createRequire } from 'module';
 import { VitePWA } from 'vite-plugin-pwa';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import { compression, defineAlgorithm } from 'vite-plugin-compression2';
+import { sentryVitePlugin } from '@sentry/vite-plugin';
 import type { Plugin } from 'vite';
 import { bundledThemeBoot, injectThemeCacheVersion } from './src/Providers/bootVersion.ts';
+import { sentryBuildOptions, shouldUploadSourceMaps } from '../config/sentry.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -42,6 +44,8 @@ const backendURL = backendHost
   ? `http://${backendHost}:${backendPort}`
   : `http://localhost:${backendPort}`;
 const buildSourceMap = process.env.NODE_ENV === 'development';
+/** Production builds emit hidden source maps for Sentry, then delete them so none are served. */
+const uploadSourceMaps = shouldUploadSourceMaps();
 const QUERY_DEVTOOLS_CHUNK_MODULES = [
   '@tanstack/react-query-devtools',
   '@tanstack/match-sorter-utils',
@@ -103,6 +107,8 @@ export default defineConfig(({ command }) => ({
       useCredentials: true,
       includeManifestIcons: false,
       workbox: {
+        /** Hidden maps exist only for the Sentry upload; the service worker never ships any. */
+        sourcemap: buildSourceMap,
         globPatterns: [
           '**/*.{js,css,html}',
           'assets/favicon*.png',
@@ -155,8 +161,8 @@ export default defineConfig(({ command }) => ({
       },
       includeAssets: [],
       manifest: {
-        name: 'LibreChat',
-        short_name: 'LibreChat',
+        name: 'Multibot Premium',
+        short_name: 'Multibot Premium',
         display: 'standalone',
         background_color: '#000000',
         theme_color: '#009688',
@@ -190,7 +196,7 @@ export default defineConfig(({ command }) => ({
         ],
       },
     }),
-    ...(buildSourceMap ? [sourcemapExclude({ excludeNodeModules: true })] : []),
+    ...(buildSourceMap || uploadSourceMaps ? [sourcemapExclude({ excludeNodeModules: true })] : []),
     compression({
       threshold: 10240,
       /**
@@ -208,6 +214,13 @@ export default defineConfig(({ command }) => ({
         }),
       ],
     }),
+    ...(command === 'build' && uploadSourceMaps
+      ? [
+          sentryVitePlugin(
+            sentryBuildOptions({ sourcemaps: { filesToDeleteAfterUpload: ['dist/**/*.map'] } }),
+          ),
+        ]
+      : []),
   ],
   optimizeDeps: {
     include: [
@@ -224,7 +237,7 @@ export default defineConfig(({ command }) => ({
     lightningcss: { exclude: Features.DirSelector },
   },
   build: {
-    sourcemap: buildSourceMap,
+    sourcemap: uploadSourceMaps ? 'hidden' : buildSourceMap,
     outDir: './dist',
     minify: 'oxc',
     rolldownOptions: {

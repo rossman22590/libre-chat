@@ -4,6 +4,7 @@ import { useRouteError } from 'react-router-dom';
 import { onClientLogsStarted, reportBoundaryError } from '~/lib/rum/logs';
 import useStaleAssetRecovery from '~/lib/assets/useRecovery';
 import { isChunkLoadError } from '~/lib/assets/recovery';
+import { captureException } from '~/lib/sentry/client';
 import Updating from '~/components/System/Updating';
 import { useLocalize } from '~/hooks';
 import logger from '~/utils/logger';
@@ -91,6 +92,12 @@ export default function RouteErrorBoundary() {
     const report = () => reportBoundaryError('route', routeError, isChunkLoadError(routeError));
     report();
     return onClientLogsStarted(report);
+  }, [routeError]);
+
+  useEffect(() => {
+    if (routeError instanceof Error && !isChunkLoadError(routeError)) {
+      captureException(routeError);
+    }
   }, [routeError]);
 
   const errorDetails = {
