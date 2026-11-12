@@ -15,6 +15,7 @@ import DeploymentTheme from '~/Providers/DeploymentTheme';
 import UiScaleSync from '~/components/System/UiScaleSync';
 import { initializeFontSize } from '~/store/fontSize';
 import { reopenTermsOnRefusal } from '~/utils/terms';
+import SentryReporter from '~/lib/sentry/Reporter';
 import { LiveAnnouncer } from '~/a11y';
 import { router } from './routes';
 import '~/Providers/MessagesHostContext';
@@ -87,6 +88,7 @@ const App = () => {
                     </FilesHostProvider>
                     <WakeLockManager />
                     <QueryDevtoolsGate />
+                    <SentryReporter />
                     <Toast />
                     <ToastViewport />
                   </DndProvider>

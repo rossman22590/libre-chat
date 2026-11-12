@@ -23,6 +23,12 @@
         "types": "./dist/credentials.d.cts",
         "default": "./dist/credentials.cjs"
       }
+    },
+    "./sentry": {
+      "require": {
+        "types": "./dist/sentry.d.cts",
+        "default": "./dist/sentry.cjs"
+      }
     }
   },
   "scripts": {
@@ -65,6 +71,8 @@
     "@babel/preset-env": "^7.29.5",
     "@babel/preset-typescript": "^7.21.0",
     "@langchain/langgraph": "^1.4.5",
+    "@sentry/node": "^11.12.0",
+    "@sentry/rollup-plugin": "^11.12.0",
     "@types/bun": "^1.2.15",
     "@types/express": "^5.0.0",
     "@types/express-session": "^1.18.2",
@@ -128,6 +136,7 @@
     "@opentelemetry/semantic-conventions": "^1.39.0",
     "@opentelemetry/winston-transport": "^0.28.0",
     "@redis/client": "5.10.0",
+    "@sentry/node": "^11.12.0",
     "@smithy/node-http-handler": "^4.4.5",
     "ai-tokenizer": "^1.0.6",
     "axios": "^1.20.0",

@@ -2,9 +2,11 @@
   <a href="https://librechat.ai">
     <img src="client/public/assets/logo.svg" height="256">
   </a>
-  <h1 align="center">
-    <a href="https://librechat.ai">LibreChat</a>
-  </h1>
+  <h1 align="center">Multibot Ultra</h1>
+</p>
+
+<p align="center">
+  Built on <a href="https://librechat.ai">LibreChat</a>. The upstream documentation below applies unless noted.
 </p>
 
 <p align="center">

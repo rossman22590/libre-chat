@@ -1,5 +1,7 @@
 import path from 'node:path';
 import { defineConfig } from 'tsdown';
+import { sentryRollupPlugin } from '@sentry/rollup-plugin';
+import { sentryBuildOptions, shouldUploadSourceMaps } from '../../config/sentry.mjs';
 
 const isMarkdownParserDependency = (id) =>
   /^(?:mdast-util-|micromark(?:-|$)|decode-named-character-reference$|devlop$|longest-streak$|unist-util-|zwitch$|character-(?:entities|reference)(?:-|$)|parse-entities$|stringify-entities$|is-(?:alphanumerical|alphabetical|decimal|hexadecimal)$|ccount$|markdown-table$|escape-string-regexp$)/.test(
@@ -13,6 +15,7 @@ export default defineConfig({
   dts: { oxc: true },
   outDir: 'dist',
   sourcemap: true,
+  plugins: shouldUploadSourceMaps() ? [sentryRollupPlugin(sentryBuildOptions())] : [],
   // Warn on module cycles at build time; CI enforces via config/circular-deps.mjs.
   checks: { circularDependency: true },
   // Externalize third-party deps consumers provide, while bundling `dotenv` for its

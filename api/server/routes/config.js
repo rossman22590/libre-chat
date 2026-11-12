@@ -8,6 +8,7 @@ const {
   isLangfuseFanoutEnabled,
   getBalanceConfig,
   getCloudFrontConfig,
+  getSentryBrowserConfig,
   getAppConfigOptionsFromUser,
   resolveBuildInfo,
   resolveTitleTiming,
@@ -233,6 +234,7 @@ router.get('/', async function (req, res) {
   try {
     const preLoginPayload = buildPreLoginPayload();
     const publicSharePayload = buildPublicSharePayload();
+    const sentry = getSentryBrowserConfig();
 
     if (!req.user) {
       const baseConfig = await resolvePreLoginAppConfig(getAppConfig);
@@ -244,6 +246,7 @@ router.get('/', async function (req, res) {
         turnstile: baseConfig?.turnstileConfig,
         rum: getRumConfig(baseConfig?.config?.telemetry),
         clientLimits: getClientLimits(baseConfig?.config?.clientLimits),
+        ...(sentry ? { sentry } : {}),
       };
 
       const interfaceConfig = baseConfig?.interfaceConfig;
@@ -362,6 +365,7 @@ router.get('/', async function (req, res) {
       ...(cloudFront ? { cloudFront } : {}),
       rum: getRumConfig(appConfig?.config?.telemetry),
       clientLimits: getClientLimits(appConfig?.config?.clientLimits),
+      ...(sentry ? { sentry } : {}),
       fileUploadSseEnabled: isEnabled(process.env.FILE_UPLOAD_SSE_ENABLED),
       endpointsDropParamsMap: endpointsDropParamsMap,
     };

@@ -3562,6 +3562,12 @@ export type TRumConfig = {
   clientLogs?: boolean;
 };
 
+export type TSentryConfig = {
+  dsn: string;
+  environment: string;
+  release?: string;
+};
+
 export type StartupConfigContext = 'share';
 
 /**
@@ -3761,6 +3767,7 @@ export type TStartupConfig = {
   analyticsGtmId?: string;
   rum?: TRumConfig;
   clientLimits?: TClientLimits;
+  sentry?: TSentryConfig;
   bundlerURL?: string;
   staticBundlerURL?: string;
   /** Whether the deployment has a configured RAG service. */

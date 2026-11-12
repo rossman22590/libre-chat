@@ -59,6 +59,12 @@ RUN \
 COPY --chown=node:node . .
 
 ARG VITE_MCP_SANDBOX_URL=
+# Optional: lets the build upload source maps to Sentry. Unset, the upload is skipped.
+# Pass an upload-only organization token; build args are visible in the image history.
+ARG SENTRY_AUTH_TOKEN=
+ARG SENTRY_ORG=
+ARG SENTRY_PROJECT=
+
 RUN \
     # React client build with configurable memory
     NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}" npm run frontend && \
